@@ -2,7 +2,11 @@
 
 [![Flutter](https://img.shields.io/badge/Flutter-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart_%5E3.13.4-0175C2?logo=dart&logoColor=white)](https://dart.dev)
+<<<<<<< HEAD
 [![Tests](https://img.shields.io/badge/Tests-507%2B%20passing-22C55E)](mobile/test/)
+=======
+[![Tests](https://img.shields.io/badge/Tests-487%20passing-22C55E)](mobile/test/)
+>>>>>>> cefeb349b5684b8d4d9bdbef75d46c3c132cf1a3
 [![Analyze](https://img.shields.io/badge/flutter%20analyze-0%20issues-22C55E)](mobile/analysis_options.yaml)
 
 CAMP Mobile is a Flutter rider cockpit for managing a motorcycle fleet, logging post-ride reports, tracking predictive maintenance and trip finances, navigating with offline maps, finding mechanics, and managing rider settings. The implementation uses a tactical **skeuomorphic clay** design system, reactive singleton `ChangeNotifier` state management, and fully offline-first `SharedPreferences` persistence.
