@@ -3,7 +3,7 @@
 [![Flutter](https://img.shields.io/badge/Flutter-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart_%5E3.13.4-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Firebase](https://img.shields.io/badge/Firebase-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com)
-[![Tests](https://img.shields.io/badge/mobile%20tests-507%2B%20passing-22C55E)](mobile/test/)
+[![Tests](https://img.shields.io/badge/mobile%20tests-642%2B%20passing-22C55E)](mobile/test/)
 [![Analyze](https://img.shields.io/badge/flutter%20analyze-0%20issues-22C55E)](mobile/analysis_options.yaml)
  
 A Flutter mobile app for adventure motorcyclists in Pakistan. CAMP keeps track of your bike, your service schedule, your fuel and your costs, and gives you an emergency card you can print and stick on your bike or helmet.
