@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
@@ -7,9 +8,101 @@ import '../../../../core/widgets/camp_card.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
 import '../../../garage/domain/bike_model.dart';
 import '../../controllers/maintenance_controller.dart';
+import '../../domain/service_schedule_engine.dart';
 import '../../domain/service_schedule_item.dart';
+import '../../domain/service_schedule_status_formatter.dart';
+
+/// Input mode for entering when a service was last performed.
+enum LastDoneInputMode {
+  /// Rider enters relative distance ("About __ km ago"), converted to odometer.
+  kmAgo,
+
+  /// Rider enters absolute odometer reading at last service.
+  odometer,
+}
+
+/// In-memory form state for an individual service schedule item.
+class _ScheduleItemFormData {
+  _ScheduleItemFormData({
+    required this.id,
+    required this.type,
+    required this.enabled,
+    required this.kmController,
+    required this.monthController,
+    required this.lastDoneController,
+    required this.mode,
+    required this.focusNode,
+    this.customTitle,
+    this.lastDoneDate,
+  });
+
+  final String id;
+  final ServiceItemType type;
+  String? customTitle;
+  bool enabled;
+  final TextEditingController kmController;
+  final TextEditingController monthController;
+  final TextEditingController lastDoneController;
+  LastDoneInputMode mode;
+  DateTime? lastDoneDate;
+  final FocusNode focusNode;
+
+  /// User-facing display name.
+  String get displayName => (type == ServiceItemType.custom && customTitle != null && customTitle!.isNotEmpty)
+      ? customTitle!
+      : type.displayName;
+
+  /// Calculates the effective last done odometer based on current input mode.
+  double? calculateLastDoneOdometer(double bikeOdometer) {
+    final text = lastDoneController.text.trim();
+    if (text.isEmpty) return null;
+    final val = double.tryParse(text);
+    if (val == null || val < 0) return null;
+
+    if (mode == LastDoneInputMode.kmAgo) {
+      if (bikeOdometer <= 0) return null;
+      return (bikeOdometer - val).clamp(0, bikeOdometer);
+    }
+    return val;
+  }
+
+  /// Validates the last done input. Returns an error message or null.
+  String? validateLastDone(double bikeOdometer) {
+    final text = lastDoneController.text.trim();
+    if (text.isEmpty) return null;
+    final val = double.tryParse(text);
+    if (val == null || val < 0) {
+      return 'Numbers only (0 or more)';
+    }
+
+    if (mode == LastDoneInputMode.kmAgo) {
+      if (bikeOdometer > 0 && val > bikeOdometer) {
+        return 'Cannot be more than bike\'s odometer (${ServiceScheduleStatusFormatter.formatNumber(bikeOdometer)} km)';
+      }
+    } else {
+      if (bikeOdometer > 0 && val > bikeOdometer) {
+        return 'Cannot be higher than bike\'s odometer (${ServiceScheduleStatusFormatter.formatNumber(bikeOdometer)} km)';
+      }
+    }
+    return null;
+  }
+
+  void dispose() {
+    kmController.dispose();
+    monthController.dispose();
+    lastDoneController.dispose();
+    focusNode.dispose();
+  }
+}
 
 /// Screen allowing the rider to configure their own service schedule per bike.
+///
+/// Features:
+///  - "About __ km ago" (default for new items) vs "At odometer __ km" segmented control.
+///  - Automatic conversion to stored absolute odometer reading.
+///  - Live friendly status messages matching the unified status formatter.
+///  - Sanity check warning if typed odometer is >3x interval in the past.
+///  - Multi-component support including rear brakes and custom items.
 class ServiceScheduleScreen extends StatefulWidget {
   const ServiceScheduleScreen({super.key, this.bikeId, this.focusItemType});
 
@@ -25,12 +118,8 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
   bool _isHarsh = false;
   bool _hasCarburetorOverride = false;
 
-  final Map<ServiceItemType, GlobalKey> _itemKeys = {};
-  final Map<ServiceItemType, bool> _enabled = {};
-  final Map<ServiceItemType, TextEditingController> _kmControllers = {};
-  final Map<ServiceItemType, TextEditingController> _monthControllers = {};
-  final Map<ServiceItemType, TextEditingController> _lastDoneKmControllers = {};
-  final Map<ServiceItemType, DateTime?> _lastDoneDates = {};
+  final Map<String, GlobalKey> _itemKeys = {};
+  final List<_ScheduleItemFormData> _items = [];
 
   @override
   void initState() {
@@ -39,7 +128,11 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
     _loadState();
     if (widget.focusItemType != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final key = _itemKeys[widget.focusItemType];
+        final target = _items.firstWhere(
+          (i) => i.type == widget.focusItemType,
+          orElse: () => _items.first,
+        );
+        final key = _itemKeys[target.id];
         if (key?.currentContext != null) {
           Scrollable.ensureVisible(
             key!.currentContext!,
@@ -48,6 +141,20 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
           );
         }
       });
+    }
+  }
+
+  @override
+  void didUpdateWidget(ServiceScheduleScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.bikeId != widget.bikeId) {
+      for (final item in _items) {
+        item.dispose();
+      }
+      _items.clear();
+      _itemKeys.clear();
+      _resolveBike();
+      _loadState();
     }
   }
 
@@ -66,82 +173,188 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
     _isHarsh = MaintenanceController.instance.isHarshConditions(bikeId);
     _hasCarburetorOverride = MaintenanceController.instance.isCarbureted(_bike);
 
-    final items = MaintenanceController.instance.getScheduleItems(bikeId);
-    for (final item in items) {
-      _enabled[item.type] = item.enabled;
-      _kmControllers[item.type] = TextEditingController(
-        text: item.intervalKm != null ? item.intervalKm.toString() : '',
-      );
-      _monthControllers[item.type] = TextEditingController(
-        text: item.intervalMonths != null ? item.intervalMonths.toString() : '',
-      );
-      _lastDoneKmControllers[item.type] = TextEditingController(
-        text: item.lastDoneKm != null
-            ? (item.lastDoneKm! % 1 == 0
-                ? item.lastDoneKm!.toInt().toString()
-                : item.lastDoneKm!.toString())
-            : '',
-      );
-      _lastDoneDates[item.type] = item.lastDoneDate;
-    }
+    final storedItems = MaintenanceController.instance.getScheduleItems(bikeId);
+    final isCarb = _bike!.fuelSystem == FuelSystem.carburetor || _hasCarburetorOverride;
 
-    // Initialize any types not yet in map
-    for (final type in ServiceItemType.values) {
-      _enabled.putIfAbsent(type, () => true);
-      _kmControllers.putIfAbsent(type, () => TextEditingController());
-      _monthControllers.putIfAbsent(type, () => TextEditingController());
-      _lastDoneKmControllers.putIfAbsent(type, () => TextEditingController());
+    for (final item in storedItems) {
+      if (item.type == ServiceItemType.carburetor && !isCarb) {
+        continue;
+      }
+
+      // Existing saved items that already store an odometer reopen in "At odometer" mode.
+      // New / empty items open in "About __ km ago" mode by default.
+      final bool hasSavedOdometer = item.lastDoneKm != null;
+      final LastDoneInputMode initialMode = hasSavedOdometer
+          ? LastDoneInputMode.odometer
+          : LastDoneInputMode.kmAgo;
+
+      final String initialLastDoneText;
+      if (hasSavedOdometer) {
+        initialLastDoneText = item.lastDoneKm! % 1 == 0
+            ? item.lastDoneKm!.toInt().toString()
+            : item.lastDoneKm!.toString();
+      } else {
+        initialLastDoneText = '';
+      }
+
+      final data = _ScheduleItemFormData(
+        id: item.id,
+        type: item.type,
+        customTitle: item.customTitle,
+        enabled: item.enabled,
+        kmController: TextEditingController(
+          text: item.intervalKm != null ? item.intervalKm.toString() : '',
+        ),
+        monthController: TextEditingController(
+          text: item.intervalMonths != null ? item.intervalMonths.toString() : '',
+        ),
+        lastDoneController: TextEditingController(text: initialLastDoneText),
+        mode: initialMode,
+        lastDoneDate: item.lastDoneDate,
+        focusNode: FocusNode(),
+      );
+
+      _itemKeys[item.id] = GlobalKey();
+      _items.add(data);
     }
   }
 
   @override
   void dispose() {
-    for (final c in _kmControllers.values) {
-      c.dispose();
-    }
-    for (final c in _monthControllers.values) {
-      c.dispose();
-    }
-    for (final c in _lastDoneKmControllers.values) {
-      c.dispose();
+    for (final item in _items) {
+      item.dispose();
     }
     super.dispose();
+  }
+
+  /// Shows the sanity check warning dialog when last service is >3x interval in the past.
+  Future<bool> _showSanityWarningDialog({
+    required int kmAgo,
+    required int interval,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.clay,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusCard),
+        ),
+        title: Text(
+          'Check Last Service',
+          style: GoogleFonts.manrope(
+            fontWeight: FontWeight.w800,
+            color: AppColors.darkCharcoal,
+            fontSize: 16,
+          ),
+        ),
+        content: Text(
+          'That is ${ServiceScheduleStatusFormatter.formatNumber(kmAgo)} km ago, much longer than the usual ${ServiceScheduleStatusFormatter.formatNumber(interval)} km. Is that right?',
+          style: GoogleFonts.manrope(
+            fontSize: 14,
+            color: AppColors.darkCharcoal,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Let me fix it',
+              style: GoogleFonts.manrope(
+                fontWeight: FontWeight.w700,
+                color: AppColors.tacticalOrangeDark,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.tacticalOrange,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppColors.radiusTile - 4),
+              ),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Yes, keep it',
+              style: GoogleFonts.manrope(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   Future<void> _save() async {
     if (_bike == null) return;
     final bikeId = _bike!.id;
+    final bikeOdo = _bike!.odometerKm.toDouble();
+
+    // 1. Validation check across all enabled items
+    for (final item in _items) {
+      if (!item.enabled) continue;
+      final error = item.validateLastDone(bikeOdo);
+      if (error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${item.displayName}: $error'),
+            backgroundColor: AppColors.alertRed,
+          ),
+        );
+        return;
+      }
+    }
+
+    // 2. Sanity warning check: trigger confirmation if result is >3x interval in the past
+    for (final item in _items) {
+      if (!item.enabled) continue;
+      final rawKm = int.tryParse(item.kmController.text.trim());
+      if (rawKm == null || rawKm <= 0) continue;
+
+      final effInterval = _isHarsh ? (rawKm * 0.80).round() : rawKm;
+      final lastDoneOdo = item.calculateLastDoneOdometer(bikeOdo);
+      if (lastDoneOdo == null) continue;
+
+      final kmAgo = (bikeOdo - lastDoneOdo).round();
+      if (kmAgo > 3 * effInterval) {
+        final confirmed = await _showSanityWarningDialog(
+          kmAgo: kmAgo,
+          interval: effInterval,
+        );
+        if (!confirmed) {
+          // Rider chose "Let me fix it" -> abort save and focus the field
+          item.focusNode.requestFocus();
+          return;
+        }
+      }
+    }
 
     await MaintenanceController.instance.setHarshConditions(bikeId, _isHarsh);
     MaintenanceController.instance.setCarburetorOverride(bikeId, _hasCarburetorOverride);
 
-    final isCarb = _bike!.fuelSystem == FuelSystem.carburetor || _hasCarburetorOverride;
-
     final updatedItems = <ServiceScheduleItem>[];
-    for (final type in ServiceItemType.values) {
-      if (type == ServiceItemType.carburetor && !isCarb) {
-        continue;
-      }
-
-      final kmText = _kmControllers[type]?.text.trim() ?? '';
-      final monthText = _monthControllers[type]?.text.trim() ?? '';
-      final lastKmText = _lastDoneKmControllers[type]?.text.trim() ?? '';
+    for (final item in _items) {
+      final kmText = item.kmController.text.trim();
+      final monthText = item.monthController.text.trim();
 
       final intervalKm = int.tryParse(kmText);
       final intervalMonths = int.tryParse(monthText);
-      final lastDoneKm = double.tryParse(lastKmText);
-      final lastDoneDate = _lastDoneDates[type];
-      final enabled = _enabled[type] ?? true;
+      // ALWAYS store the service ODOMETER, never "km ago"
+      final lastDoneKm = item.calculateLastDoneOdometer(bikeOdo);
+      final lastDoneDate = item.lastDoneDate;
 
       updatedItems.add(ServiceScheduleItem(
-        id: 'sched_${bikeId}_${type.name}',
+        id: item.id,
         bikeId: bikeId,
-        type: type,
+        type: item.type,
+        customTitle: item.customTitle,
         intervalKm: intervalKm,
         intervalMonths: intervalMonths,
         lastDoneKm: lastDoneKm,
         lastDoneDate: lastDoneDate,
-        enabled: enabled,
+        enabled: item.enabled,
         updatedAt: DateTime.now().toUtc(),
       ));
     }
@@ -164,6 +377,79 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
     }
   }
 
+  void _showAddCustomItemDialog() {
+    final nameCtrl = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.clay,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusCard),
+        ),
+        title: Text(
+          'Add Custom Service Item',
+          style: GoogleFonts.manrope(
+            fontWeight: FontWeight.w800,
+            color: AppColors.darkCharcoal,
+            fontSize: 16,
+          ),
+        ),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: 'Service item name',
+            hintText: 'e.g. Fork Oil, Coolant, Brake Fluid',
+            filled: true,
+            fillColor: Colors.white,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppColors.radiusTile - 4),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.manrope(color: AppColors.mutedText, fontWeight: FontWeight.w700),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.tacticalOrange,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              final name = nameCtrl.text.trim();
+              if (name.isEmpty) return;
+              Navigator.of(ctx).pop();
+              final newItem = _ScheduleItemFormData(
+                id: 'sched_${_bike!.id}_custom_${DateTime.now().millisecondsSinceEpoch}',
+                type: ServiceItemType.custom,
+                customTitle: name,
+                enabled: true,
+                kmController: TextEditingController(),
+                monthController: TextEditingController(),
+                lastDoneController: TextEditingController(),
+                mode: LastDoneInputMode.kmAgo,
+                focusNode: FocusNode(),
+              );
+              setState(() {
+                _itemKeys[newItem.id] = GlobalKey();
+                _items.add(newItem);
+              });
+            },
+            child: Text(
+              'Add Item',
+              style: GoogleFonts.manrope(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_bike == null) {
@@ -177,15 +463,6 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
         body: const Center(child: Text('No active motorcycle selected')),
       );
     }
-
-    final isCarbBike = _bike!.fuelSystem == FuelSystem.carburetor || _hasCarburetorOverride;
-
-    final typesToDisplay = ServiceItemType.values.where((t) {
-      if (t == ServiceItemType.carburetor && !isCarbBike) {
-        return false;
-      }
-      return true;
-    }).toList();
 
     return Scaffold(
       backgroundColor: AppColors.clay,
@@ -229,11 +506,33 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // One row / card per service item type
-                    ...typesToDisplay.map((type) => Padding(
+                    // One row / card per service item
+                    ..._items.map((item) => Padding(
+                          key: _itemKeys[item.id],
                           padding: const EdgeInsets.only(bottom: 14),
-                          child: _buildItemCard(type),
+                          child: _buildItemCard(item),
                         )),
+
+                    // Add Custom Item Button
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: const BorderSide(color: AppColors.tacticalOrange, width: 1.5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                        ),
+                      ),
+                      icon: const Icon(Icons.add_rounded, color: AppColors.tacticalOrange),
+                      label: Text(
+                        'Add Custom Service Item',
+                        style: GoogleFonts.manrope(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.tacticalOrangeDark,
+                        ),
+                      ),
+                      onPressed: _showAddCustomItemDialog,
+                    ),
 
                     const SizedBox(height: 20),
 
@@ -301,7 +600,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                   ),
                 ),
                 Text(
-                  'Odometer: ${bike.odometerKm} km • ${_isHarsh ? "Harsh Conditions ON (-20%)" : "Standard Conditions"}',
+                  'Odometer: ${ServiceScheduleStatusFormatter.formatNumber(bike.odometerKm)} km • ${_isHarsh ? "Harsh Conditions ON (-20%)" : "Standard Conditions"}',
                   style: GoogleFonts.manrope(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -412,11 +711,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
     );
   }
 
-  String _formatKm(int km) {
-    final str = km.toString();
-    final reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(reg, (Match m) => '${m[1]},');
-  }
+  String _formatKm(int km) => ServiceScheduleStatusFormatter.formatNumber(km);
 
   String _getKmLabel(ServiceItemType type) {
     switch (type) {
@@ -434,12 +729,16 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
         return 'Full tuning every (km)';
       case ServiceItemType.brakes:
         return 'Check brake pads every (km)';
+      case ServiceItemType.rearBrakes:
+        return 'Check rear brake shoes/pads every (km)';
       case ServiceItemType.tyres:
         return 'Check tyres every (km)';
       case ServiceItemType.carburetor:
         return 'Clean or adjust every (km)';
       case ServiceItemType.battery:
         return 'Check battery every (months)';
+      case ServiceItemType.custom:
+        return 'Service every (km)';
     }
   }
 
@@ -459,12 +758,16 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
         return 'Distance between full tune-ups, e.g. 10,000 km';
       case ServiceItemType.brakes:
         return 'Distance between brake checks';
+      case ServiceItemType.rearBrakes:
+        return 'Distance between rear brake checks';
       case ServiceItemType.tyres:
         return 'Distance between tyre checks';
       case ServiceItemType.carburetor:
         return 'Distance between carburetor services';
       case ServiceItemType.battery:
         return 'Time between battery checks';
+      case ServiceItemType.custom:
+        return 'Distance between services';
     }
   }
 
@@ -482,21 +785,28 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
       case ServiceItemType.tuning:
         return 'Or tune every (months)';
       case ServiceItemType.brakes:
+      case ServiceItemType.rearBrakes:
       case ServiceItemType.tyres:
         return 'Or check every (months)';
       case ServiceItemType.carburetor:
         return 'Or clean or adjust every (months)';
       case ServiceItemType.battery:
         return 'Check battery every (months)';
+      case ServiceItemType.custom:
+        return 'Or service every (months)';
     }
   }
 
-  Widget _buildItemCard(ServiceItemType type) {
-    final enabled = _enabled[type] ?? true;
-    final kmController = _kmControllers[type]!;
-    final monthController = _monthControllers[type]!;
-    final lastKmController = _lastDoneKmControllers[type]!;
-    final lastDate = _lastDoneDates[type];
+  Widget _buildItemCard(_ScheduleItemFormData item) {
+    final type = item.type;
+    final enabled = item.enabled;
+    final kmController = item.kmController;
+    final monthController = item.monthController;
+    final lastDoneController = item.lastDoneController;
+    final lastDate = item.lastDoneDate;
+    final isCustom = type == ServiceItemType.custom;
+    final bikeOdo = _bike?.odometerKm.toDouble() ?? 0.0;
+    final bool hasBikeOdometer = bikeOdo > 0;
 
     // Compute effective interval text transparently for km field
     final rawKm = int.tryParse(kmController.text.trim());
@@ -515,8 +825,44 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
 
     final isBattery = type == ServiceItemType.battery;
 
+    // Evaluate live status for this card
+    final effLastDoneOdo = item.calculateLastDoneOdometer(bikeOdo);
+    final tempItem = ServiceScheduleItem(
+      id: item.id,
+      bikeId: _bike!.id,
+      type: item.type,
+      customTitle: item.customTitle,
+      intervalKm: rawKm,
+      intervalMonths: int.tryParse(monthController.text.trim()),
+      lastDoneKm: effLastDoneOdo,
+      lastDoneDate: lastDate,
+      enabled: enabled,
+    );
+    final tempPrediction = ServiceScheduleEngine.evaluateItem(
+      item: tempItem,
+      currentOdometerKm: bikeOdo,
+      isHarshConditions: _isHarsh,
+      recentReports: const [],
+    );
+    final friendlyStatus = ServiceScheduleStatusFormatter.format(tempPrediction);
+
+    // Dynamic conversion subtitle under the last done field
+    String? conversionText;
+    if (item.mode == LastDoneInputMode.kmAgo) {
+      if (!hasBikeOdometer) {
+        conversionText = 'Add your bike\'s odometer first';
+      } else {
+        final parsed = double.tryParse(lastDoneController.text.trim());
+        if (parsed != null && parsed >= 0) {
+          final doneOdo = (bikeOdo - parsed).round();
+          conversionText = 'Done at ${_formatKm(doneOdo)} km';
+        }
+      }
+    }
+
+    final lastDoneError = item.validateLastDone(bikeOdo);
+
     return CampCard(
-      key: _itemKeys.putIfAbsent(type, () => GlobalKey()),
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -528,7 +874,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  type.displayName,
+                  item.displayName,
                   style: GoogleFonts.manrope(
                     fontSize: 15,
                     fontWeight: FontWeight.w800,
@@ -536,12 +882,22 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                   ),
                 ),
               ),
+              if (isCustom)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, color: AppColors.alertRed, size: 20),
+                  onPressed: () {
+                    setState(() {
+                      _items.remove(item);
+                      item.dispose();
+                    });
+                  },
+                ),
               Switch.adaptive(
                 value: enabled,
                 activeThumbColor: AppColors.tacticalOrange,
                 onChanged: (val) {
                   setState(() {
-                    _enabled[type] = val;
+                    item.enabled = val;
                   });
                 },
               ),
@@ -550,6 +906,83 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
 
           if (enabled) ...[
             const Divider(height: 20, color: AppColors.clayDark),
+
+            // Friendly Status Banner (Unified across all 4 surfaces)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: friendlyStatus.color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(AppColors.radiusTile - 4),
+                border: Border.all(
+                  color: friendlyStatus.color.withValues(alpha: 0.35),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: friendlyStatus.color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          friendlyStatus.headline,
+                          style: GoogleFonts.manrope(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: friendlyStatus.color == AppColors.statusGreen
+                                ? AppColors.darkCharcoal
+                                : friendlyStatus.color,
+                          ),
+                        ),
+                        if (friendlyStatus.detail != null &&
+                            !friendlyStatus.headline.contains(friendlyStatus.detail!)) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            friendlyStatus.detail!,
+                            style: GoogleFonts.manrope(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.mutedText,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (friendlyStatus.actionLabel != null)
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      onPressed: () {
+                        item.focusNode.requestFocus();
+                      },
+                      child: Text(
+                        friendlyStatus.actionLabel!,
+                        style: GoogleFonts.manrope(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.alertRed,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
 
             if (isBattery) ...[
               // Battery: single time-based interval
@@ -565,6 +998,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
               TextField(
                 controller: monthController,
                 keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 style: GoogleFonts.manrope(fontSize: 14, fontWeight: FontWeight.w600),
                 decoration: InputDecoration(
                   hintText: 'e.g. 6 (optional)',
@@ -626,6 +1060,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
               TextField(
                 controller: kmController,
                 keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 style: GoogleFonts.manrope(fontSize: 14, fontWeight: FontWeight.w600),
                 decoration: InputDecoration(
                   hintText: 'e.g. 1500 (optional)',
@@ -689,6 +1124,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
               TextField(
                 controller: monthController,
                 keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 style: GoogleFonts.manrope(fontSize: 14, fontWeight: FontWeight.w600),
                 decoration: InputDecoration(
                   hintText: 'e.g. 6 (optional)',
@@ -740,7 +1176,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
 
             const SizedBox(height: 16),
 
-            // Last Done Section
+            // ── Last Done Section with Segmented Control ──────────────────────
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -750,8 +1186,11 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
                     children: [
                       Text(
                         'When did you last do this?',
@@ -770,10 +1209,11 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                           ),
                           onPressed: () {
                             if (match.km != null) {
-                              lastKmController.text = match.km!.round().toString();
+                              item.mode = LastDoneInputMode.odometer;
+                              lastDoneController.text = match.km!.round().toString();
                             }
                             if (match.date != null) {
-                              _lastDoneDates[type] = match.date;
+                              item.lastDoneDate = match.date;
                             }
                             setState(() {});
                           },
@@ -788,26 +1228,161 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                         ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: lastKmController,
-                          keyboardType: TextInputType.number,
-                          style: GoogleFonts.manrope(fontSize: 13, fontWeight: FontWeight.w600),
-                          decoration: InputDecoration(
-                            labelText: 'Odometer (km)',
-                            labelStyle: GoogleFonts.manrope(fontSize: 12),
-                            isDense: true,
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(AppColors.radiusTile - 4),
-                              borderSide: const BorderSide(color: AppColors.clayDark),
+                  const SizedBox(height: 10),
+
+                  // Segmented control: "About __ km ago" / "At odometer __ km"
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.clay,
+                      borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                    ),
+                    padding: const EdgeInsets.all(3),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: hasBikeOdometer
+                                ? () {
+                                    if (item.mode != LastDoneInputMode.kmAgo) {
+                                      // Convert currently typed odometer to km ago if valid
+                                      final curVal = double.tryParse(lastDoneController.text.trim());
+                                      if (curVal != null && curVal <= bikeOdo && curVal >= 0) {
+                                        lastDoneController.text = (bikeOdo - curVal).round().toString();
+                                      } else {
+                                        lastDoneController.clear();
+                                      }
+                                      setState(() {
+                                        item.mode = LastDoneInputMode.kmAgo;
+                                      });
+                                    }
+                                  }
+                                : () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Add your bike\'s odometer first'),
+                                        duration: Duration(seconds: 2),
+                                      ),
+                                    );
+                                  },
+                            borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              decoration: BoxDecoration(
+                                color: item.mode == LastDoneInputMode.kmAgo
+                                    ? AppColors.tacticalOrange
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                'About __ km ago',
+                                style: GoogleFonts.manrope(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: item.mode == LastDoneInputMode.kmAgo
+                                      ? Colors.white
+                                      : (hasBikeOdometer ? AppColors.darkCharcoal : AppColors.mutedLight),
+                                ),
+                              ),
                             ),
                           ),
+                        ),
+                        Expanded(
+                          child: InkWell(
+                            onTap: () {
+                              if (item.mode != LastDoneInputMode.odometer) {
+                                // Convert currently typed km ago to odometer reading
+                                final curVal = double.tryParse(lastDoneController.text.trim());
+                                if (curVal != null && curVal >= 0 && hasBikeOdometer && curVal <= bikeOdo) {
+                                  lastDoneController.text = (bikeOdo - curVal).round().toString();
+                                } else {
+                                  lastDoneController.clear();
+                                }
+                                setState(() {
+                                  item.mode = LastDoneInputMode.odometer;
+                                });
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              decoration: BoxDecoration(
+                                color: item.mode == LastDoneInputMode.odometer
+                                    ? AppColors.tacticalOrange
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                'At odometer __ km',
+                                style: GoogleFonts.manrope(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: item.mode == LastDoneInputMode.odometer
+                                      ? Colors.white
+                                      : AppColors.darkCharcoal,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Input Row: Km / Odometer Field + Date Picker
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TextField(
+                              controller: lastDoneController,
+                              focusNode: item.focusNode,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                              enabled: !(item.mode == LastDoneInputMode.kmAgo && !hasBikeOdometer),
+                              style: GoogleFonts.manrope(fontSize: 13, fontWeight: FontWeight.w600),
+                              decoration: InputDecoration(
+                                labelText: item.mode == LastDoneInputMode.kmAgo
+                                    ? 'Km since you did it'
+                                    : 'Odometer when last changed (km)',
+                                labelStyle: GoogleFonts.manrope(fontSize: 12),
+                                hintText: (item.mode == LastDoneInputMode.kmAgo && !hasBikeOdometer)
+                                    ? 'Add your bike\'s odometer first'
+                                    : 'e.g. 250',
+                                errorText: lastDoneError,
+                                isDense: true,
+                                filled: true,
+                                fillColor: Colors.white,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(AppColors.radiusTile - 4),
+                                  borderSide: const BorderSide(color: AppColors.clayDark),
+                                ),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                            if (conversionText != null) ...[
+                              const SizedBox(height: 4),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: Text(
+                                  conversionText,
+                                  style: GoogleFonts.manrope(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: (item.mode == LastDoneInputMode.kmAgo && !hasBikeOdometer)
+                                        ? AppColors.alertRed
+                                        : AppColors.tacticalOrangeDark,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -823,7 +1398,7 @@ class _ServiceScheduleScreenState extends State<ServiceScheduleScreen> {
                             );
                             if (picked != null) {
                               setState(() {
-                                _lastDoneDates[type] = picked;
+                                item.lastDoneDate = picked;
                               });
                             }
                           },

@@ -1,7 +1,58 @@
+import 'bike_model.dart';
+
 /// Pure logic for motorcycle fuel estimation and consumption calculations.
-/// IMPORTANT: Contains NO Flutter imports.
+/// IMPORTANT: Contains NO Flutter UI imports.
 class FuelEstimator {
   const FuelEstimator._();
+
+  /// Computes the current remaining fuel volume in liters from the bike's
+  /// baseline fuel volume, baseline odometer reading, and current odometer reading:
+  /// clamp(fuelRemainingLiters - (currentOdometer - fuelLevelOdometerKm) / fuelAverageKmPerLiter, 0, tankCapacity)
+  static double? currentLiters(Bike? bike) {
+    if (bike == null) return null;
+    final baseLiters = bike.fuelRemainingLiters;
+    if (baseLiters == null) return null;
+    final currentOdo = bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
+    final baseOdo = bike.fuelLevelOdometerKm ?? currentOdo;
+    return computeCurrentLiters(
+      fuelRemainingLiters: baseLiters,
+      currentOdometer: currentOdo,
+      fuelLevelOdometerKm: baseOdo,
+      fuelAverageKmPerLiter: bike.fuelAverageKmPerLiter,
+      tankCapacity: bike.fuelTankCapacityLiters,
+    );
+  }
+
+  /// Pure mathematical computation of current fuel level:
+  /// clamp(fuelRemainingLiters - (currentOdometer - fuelLevelOdometerKm) / fuelAverageKmPerLiter, 0, tankCapacity)
+  static double? computeCurrentLiters({
+    required double? fuelRemainingLiters,
+    required double? currentOdometer,
+    required double? fuelLevelOdometerKm,
+    required double? fuelAverageKmPerLiter,
+    required double? tankCapacity,
+  }) {
+    if (fuelRemainingLiters == null) return null;
+    final currentOdo = currentOdometer ?? 0.0;
+    final baseOdo = fuelLevelOdometerKm ?? currentOdo;
+    final distanceSinceSet = currentOdo - baseOdo;
+
+    if (fuelAverageKmPerLiter == null ||
+        fuelAverageKmPerLiter <= 0 ||
+        distanceSinceSet <= 0) {
+      if (tankCapacity != null && tankCapacity > 0) {
+        return fuelRemainingLiters.clamp(0.0, tankCapacity);
+      }
+      return fuelRemainingLiters < 0.0 ? 0.0 : fuelRemainingLiters;
+    }
+
+    final consumed = distanceSinceSet / fuelAverageKmPerLiter;
+    final remaining = fuelRemainingLiters - consumed;
+    final maxCap = (tankCapacity != null && tankCapacity > 0)
+        ? tankCapacity
+        : double.infinity;
+    return remaining.clamp(0.0, maxCap);
+  }
 
   /// Applies distance traveled [km] to [currentLiters] given consumption [kmPerLiter].
   /// Returns updated fuel in liters, clamped to never fall below 0.0.

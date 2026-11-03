@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/widgets/camp_bottom_nav.dart';
+import '../../../dashboard/presentation/widgets/ride_summary_sheet.dart';
+import '../../../garage/services/fuel_tracker_service.dart';
 import '../../controllers/navigation_controller.dart';
 import '../../domain/geocoding_service.dart';
 import '../../domain/location_service.dart';
@@ -157,6 +160,31 @@ class _NavigationMapScreenState extends State<NavigationMapScreen>
     }
   }
 
+  /// Finishes the active tracked ride from the "Tracking ride" chip and presents
+  /// the ride summary sheet (or a short-ride notice if under 0.1 km).
+  Future<void> _finishRideFromChip() async {
+    final report = await FuelTrackerService.instance.finishRide();
+    if (_controller.state == NavigationState.arrived) {
+      _controller.dismissArrived();
+    }
+    if (mounted) {
+      if (report != null) {
+        RideSummarySheet.show(context, report);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Ride too short to record',
+              style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+            ),
+            backgroundColor: AppColors.darkCharcoal,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -166,6 +194,27 @@ class _NavigationMapScreenState extends State<NavigationMapScreen>
         final isNavigating = state == NavigationState.navigating;
         final isPreviewing = state == NavigationState.previewing;
         final isArrived = state == NavigationState.arrived;
+
+        if (_controller.trackingWarningMessage != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            final msg = _controller.trackingWarningMessage;
+            if (msg != null) {
+              _controller.clearTrackingWarning();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    msg,
+                    style: GoogleFonts.manrope(fontWeight: FontWeight.w600),
+                  ),
+                  backgroundColor: AppColors.darkCharcoal,
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 4),
+                ),
+              );
+            }
+          });
+        }
 
         // Auto-center camera during navigation when requested
         if (isNavigating && _controller.isScreenCentered) {
@@ -201,6 +250,9 @@ class _NavigationMapScreenState extends State<NavigationMapScreen>
                     tileProvider: widget.tileProvider,
                     onTapMap: () {
                       _controller.clearSelectedPoiMarker();
+                      if (_controller.state == NavigationState.arrived) {
+                        _controller.dismissArrived();
+                      }
                     },
                   ),
                 ),
@@ -282,6 +334,88 @@ class _NavigationMapScreenState extends State<NavigationMapScreen>
                       mapController: _mapController,
                     ),
                   ),
+
+                // ── 4b. Tracking Ride Pill (with Finish action) ─────────────
+                ListenableBuilder(
+                  listenable: FuelTrackerService.instance,
+                  builder: (context, _) {
+                    if (!FuelTrackerService.instance.isRiding) {
+                      return const SizedBox.shrink();
+                    }
+                    return Positioned(
+                      top: MediaQuery.of(context).padding.top +
+                          (isNavigating ? 112 : (isPreviewing ? 180 : 124)),
+                      left: 16,
+                      child: Container(
+                        key: const ValueKey('tracking_ride_chip'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141416).withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: AppColors.statusGreen.withValues(alpha: 0.6),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: const BoxDecoration(
+                                color: AppColors.statusGreen,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Tracking ride • ${FuelTrackerService.instance.rideDistanceKm.toStringAsFixed(1)} km',
+                              style: GoogleFonts.manrope(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              key: const ValueKey('tracking_ride_chip_finish_button'),
+                              onTap: _finishRideFromChip,
+                              behavior: HitTestBehavior.opaque,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: AppColors.tacticalOrange,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  'Finish',
+                                  style: GoogleFonts.manrope(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
 
                 // ── 5. Bottom Sheets & Bars ──────────────────────────────────
                 Positioned(

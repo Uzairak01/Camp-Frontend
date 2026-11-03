@@ -100,7 +100,8 @@ void main() {
 
     // 9. Rider Medical & SOS ID Card
     expect(find.text('RIDER MEDICAL & SOS ID'), findsOneWidget);
-    expect(find.text('System Armed'), findsOneWidget);
+    expect(find.text('Add a contact'), findsOneWidget);
+    expect(find.text('System Armed'), findsNothing);
     expect(find.text('Emergency ICE:'), findsOneWidget);
     expect(find.text('Blood & Allergies:'), findsOneWidget);
     expect(find.text('Emergency SOS Method:'), findsOneWidget);

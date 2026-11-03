@@ -2,7 +2,7 @@
 
 [![Flutter](https://img.shields.io/badge/Flutter-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart_%5E3.13.4-0175C2?logo=dart&logoColor=white)](https://dart.dev)
-[![Tests](https://img.shields.io/badge/Tests-415%20passing-22C55E)](mobile/test/)
+[![Tests](https://img.shields.io/badge/Tests-507%2B%20passing-22C55E)](mobile/test/)
 [![Analyze](https://img.shields.io/badge/flutter%20analyze-0%20issues-22C55E)](mobile/analysis_options.yaml)
 
 CAMP Mobile is a Flutter rider cockpit for managing a motorcycle fleet, logging post-ride reports, tracking predictive maintenance and trip finances, navigating with offline maps, finding mechanics, and managing rider settings. The implementation uses a tactical **skeuomorphic clay** design system, reactive singleton `ChangeNotifier` state management, and fully offline-first `SharedPreferences` persistence.
@@ -22,7 +22,7 @@ flutter run
 ### Static Analysis & Tests
 ```bash
 flutter analyze    # 0 issues expected
-flutter test       # 415 / 415 passing
+flutter test       # 445+ passing
 ```
 
 ---
@@ -182,11 +182,20 @@ All route strings are declared as constants in [`lib/app/routes.dart`](lib/app/r
 - Emergency number selector (1122, 15, 115, custom).
 - Dedicated Emergency QR screen with real scannable payload, per-field privacy toggles, and PNG/PDF export.
 
+### Voice Copilot (`features/voice_copilot/`)
+- **Tactical Chatbot Interface** — Simple chatbot conversation layout with header drawer toggle, close action, suggestion chips, and bottom text bar with animated mic.
+- **Local Chat History** — Side drawer panel supporting "New chat", search across messages, time categorization (Today, Yesterday, Earlier), and local phone persistence.
+- **Data Honesty** — Answers strictly from stored telemetry (fuel level, odometer, service schedule, mechanics directory); answers "I can't answer that yet" otherwise without fabricated helmet, mesh intercom, or Bluetooth token claims.
+
+### Brand Design System (UI-1)
+- **Authentic Header Branding** — `HomeScreen` displays the CAMP logo and title without orange dot.
+- **De-cluttered Headers** — Logo, wordmark, and orange dot removed from all secondary screen headers (retained on Login, Sign-up, Forgot Password, and Drawer).
+
 ---
 
 ## Test Suite
 
-20+ test files · **415 tests · 0 failures · 0 lints**
+20+ test files · **445+ tests · 0 failures · 0 lints**
 
 | File | What It Covers |
 |---|---|
@@ -219,10 +228,9 @@ All route strings are declared as constants in [`lib/app/routes.dart`](lib/app/r
 
 ## Project Status & Issue Tracking
 
-The project uses a comprehensive **119-issue tracking matrix** documented in [`CODE_REVIEW_REPORT.md`](CODE_REVIEW_REPORT.md).
+The project uses a comprehensive **156-issue tracking matrix** documented in [`CODE_REVIEW_REPORT.md`](CODE_REVIEW_REPORT.md).
 
-- **Current Progress**: **76 Done / 119 Tracked (63.9% Complete)**
-- **Critical Defects 1–4**: All resolved and verified in automated tests.
-- **Batch E (Scanner, Mechanics, Route Packs)**: Fully complete.
-- **Next Development Focus**: **Batch D** (Maintenance & Finances shared repository, bikeId on expenses/refills, per-bike pre-ride checks).
+- **Current Progress**: **117 Done / 156 Tracked (75.0% Complete)**
+- **Batches Completed**: Batches A, B, C, D, E, F, G, and UI-1 are completed and verified on device.
+- **Next Development Focus**: **Batch H-1** (login/sign-up cleanup, local accounts with salted hash, Google sign-in button placeholder, and glass UI), followed by **Batch H-2** (change password), **Step 4** (Navigation & live ride tracking), and **Firebase** backend.
 

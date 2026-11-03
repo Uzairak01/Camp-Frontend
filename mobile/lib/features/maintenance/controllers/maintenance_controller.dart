@@ -439,16 +439,22 @@ class MaintenanceController extends ChangeNotifier {
   }
 
   /// Returns all schedule items configured for the bike, creating unconfigured
-  /// items for any missing types.
+  /// items for any missing types and appending any rider-added custom items.
   List<ServiceScheduleItem> getScheduleItems(String bikeId) {
     final bike = _resolveBike(bikeId);
     final isCarb = isCarbureted(bike);
 
     final stored = _schedules[bikeId] ?? [];
-    final storedMap = {for (final item in stored) item.type: item};
+    final storedMap = {
+      for (final item in stored.where((i) => i.type != ServiceItemType.custom))
+        item.type: item,
+    };
 
     final result = <ServiceScheduleItem>[];
     for (final type in ServiceItemType.values) {
+      if (type == ServiceItemType.custom) {
+        continue;
+      }
       if (type == ServiceItemType.carburetor && !isCarb) {
         continue;
       }
@@ -473,6 +479,10 @@ class MaintenanceController extends ChangeNotifier {
         ));
       }
     }
+
+    // Append any rider-added custom items
+    result.addAll(stored.where((i) => i.type == ServiceItemType.custom));
+
     return result;
   }
 

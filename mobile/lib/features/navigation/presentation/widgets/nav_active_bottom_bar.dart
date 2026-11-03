@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/theme/app_colors.dart';
+import '../../../dashboard/presentation/widgets/ride_summary_sheet.dart';
+import '../../../garage/services/fuel_tracker_service.dart';
 import '../../controllers/navigation_controller.dart';
 
 /// Dark obsidian bottom telemetry dock during active State 3 navigation:
@@ -20,6 +24,124 @@ class NavActiveBottomBar extends StatelessWidget {
   final VoidCallback? onToggleOverview;
 
   Future<void> _promptExitConfirmation(BuildContext context) async {
+    final isTracking = FuelTrackerService.instance.isRiding;
+
+    if (isTracking) {
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF141416),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            16,
+            20,
+            MediaQuery.of(ctx).padding.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF374151),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Finish ride?',
+                style: GoogleFonts.manrope(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Choose whether to finish and save your ride log now, or keep tracking distance and fuel in the background.',
+                style: GoogleFonts.manrope(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF9CA3AF),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () => Navigator.of(ctx).pop('finish'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.tacticalOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                  ),
+                ),
+                child: Text(
+                  'Finish ride',
+                  style: GoogleFonts.manrope(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton(
+                onPressed: () => Navigator.of(ctx).pop('keep'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Color(0xFF374151)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                  ),
+                ),
+                child: Text(
+                  'Keep tracking',
+                  style: GoogleFonts.manrope(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (choice == 'finish') {
+        final report = await FuelTrackerService.instance.finishRide();
+        onConfirmExit();
+        if (context.mounted) {
+          if (report != null) {
+            RideSummarySheet.show(context, report);
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Ride too short to record',
+                  style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+                ),
+                backgroundColor: AppColors.darkCharcoal,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        }
+      } else if (choice == 'keep') {
+        onConfirmExit();
+      }
+      return;
+    }
+
     final shouldExit = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(

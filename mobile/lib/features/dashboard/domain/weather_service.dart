@@ -108,8 +108,10 @@ class LiveWeatherService implements WeatherService {
 class WeatherProvider {
   WeatherProvider._();
 
-  static const String apiKey =
-      String.fromEnvironment('WEATHER_API_KEY', defaultValue: '');
+  /// Ingested at compile-time via `--dart-define=WEATHER_API_KEY=<key>`.
+  /// No default key is hard-coded; when unset or empty, [apiKey] defaults to
+  /// empty string and the UI gracefully renders the "Weather unavailable" state.
+  static const String apiKey = String.fromEnvironment('WEATHER_API_KEY');
 
   /// Returns true if a live weather API key is defined or a test mock is injected.
   static bool get isConfigured => apiKey.isNotEmpty || mockService != null;

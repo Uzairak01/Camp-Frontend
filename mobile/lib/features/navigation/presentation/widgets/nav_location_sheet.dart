@@ -15,6 +15,38 @@ class NavLocationSheet extends StatelessWidget {
   final NavigationController controller;
   final VoidCallback onTapDirections;
 
+  /// Opens the rename dialog and saves the rider's current position under the
+  /// entered name via [NavigationController.saveCurrentLocationAs]. Needs a
+  /// real GPS fix, so without one the rider gets a hint instead.
+  Future<void> _openRenameDialog(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (controller.userLatLng == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Waiting for your location before it can be saved.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenamePlaceDialog(
+        initialName: controller.savedPlaceNameNearRider ?? '',
+      ),
+    );
+    if (name == null) return;
+    final saved = await controller.saveCurrentLocationAs(name);
+    if (saved) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Saved as "$name"'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -70,7 +102,10 @@ class NavLocationSheet extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
                       children: [
                         // "YOUR LOCATION" Pill
                         Container(
@@ -92,32 +127,45 @@ class NavLocationSheet extends StatelessWidget {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            controller.currentLocationSubtitle.isNotEmpty
-                                ? controller.currentLocationSubtitle
-                                : 'GPS Ready',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.mutedLight,
-                            ),
+                        Text(
+                          controller.currentLocationSubtitle.isNotEmpty
+                              ? controller.currentLocationSubtitle
+                              : 'GPS Ready',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.mutedLight,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 5),
-                    Text(
-                      controller.currentLocationName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.darkCharcoal,
+                    // Tapping the label lets the rider name this place.
+                    InkWell(
+                      onTap: () => _openRenameDialog(context),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              controller.currentLocationName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.darkCharcoal,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Icon(
+                            Icons.edit_outlined,
+                            size: 14,
+                            color: AppColors.mutedLight,
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -180,6 +228,65 @@ class NavLocationSheet extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+/// Small dialog with a name field and a "Save this place" action.
+///
+/// Owns its [TextEditingController] so it is disposed with the dialog; pops the
+/// trimmed name, or null when cancelled or left blank.
+class _RenamePlaceDialog extends StatefulWidget {
+  const _RenamePlaceDialog({required this.initialName});
+
+  /// Pre-filled name (the existing saved name here, or empty).
+  final String initialName;
+
+  @override
+  State<_RenamePlaceDialog> createState() => _RenamePlaceDialogState();
+}
+
+class _RenamePlaceDialogState extends State<_RenamePlaceDialog> {
+  late final TextEditingController _nameController =
+      TextEditingController(text: widget.initialName);
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  /// Closes the dialog returning the trimmed name (null when blank).
+  void _submit() {
+    final name = _nameController.text.trim();
+    Navigator.of(context).pop(name.isEmpty ? null : name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Name this place'),
+      content: TextField(
+        controller: _nameController,
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        textCapitalization: TextCapitalization.words,
+        onSubmitted: (_) => _submit(),
+        decoration: const InputDecoration(
+          hintText: 'e.g. Home, PUEHS Town II',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Save this place'),
+        ),
+      ],
     );
   }
 }

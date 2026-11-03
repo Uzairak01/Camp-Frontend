@@ -25,12 +25,17 @@ class NavSearchBar extends StatefulWidget {
   State<NavSearchBar> createState() => _NavSearchBarState();
 }
 
+/// State for [NavSearchBar].
+///
+/// Search runs only on explicit submit (keyboard search key or the search
+/// icon) because Nominatim forbids autocomplete. The results panel is driven
+/// by [NavigationController.searchStatus] and stays visible after the keyboard
+/// closes: the keyboard search action unfocuses the field, so tying the panel
+/// to focus would hide the very results the rider just asked for.
 class _NavSearchBarState extends State<NavSearchBar> {
   final TextEditingController _textController = TextEditingController();
   final FocusNode _focusNode = FocusNode();
   bool _isFocused = false;
-  bool _isSearching = false;
-  List<PlaceSearchResult> _searchResults = [];
 
   @override
   void initState() {
@@ -49,36 +54,24 @@ class _NavSearchBarState extends State<NavSearchBar> {
     super.dispose();
   }
 
-  Future<void> _handleSubmitted(String query) async {
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return;
+  /// Submits the current text as a search (keyboard search key or icon tap).
+  void _handleSubmitted(String query) {
+    if (query.trim().isEmpty) return;
+    widget.controller.submitSearch(query);
+  }
 
-    setState(() {
-      _isSearching = true;
-    });
-
-    final results = await widget.controller.searchPlaces(trimmed);
-
-    if (mounted) {
-      setState(() {
-        _isSearching = false;
-        _searchResults = results;
-      });
-
-      if (results.isNotEmpty) {
-        if (results.length == 1) {
-          _selectPlace(results.first);
-        }
-      }
-    }
+  /// Clears the field and any search results/errors.
+  void _clearSearch() {
+    _textController.clear();
+    widget.controller.clearSearch();
   }
 
   void _selectPlace(PlaceSearchResult place) {
     _textController.text = place.name;
     _focusNode.unfocus();
+    widget.controller.clearSearch();
     setState(() {
       _isFocused = false;
-      _searchResults = [];
     });
 
     if (widget.onSelectPlace != null) {
@@ -90,6 +83,18 @@ class _NavSearchBarState extends State<NavSearchBar> {
 
   @override
   Widget build(BuildContext context) {
+    // Rebuild on search status changes and on every text edit (clear button,
+    // empty-field panel).
+    return ListenableBuilder(
+      listenable: Listenable.merge([widget.controller, _textController]),
+      builder: (context, _) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    final status = widget.controller.searchStatus;
+    final fieldEmpty = _textController.text.trim().isEmpty;
+    final showPanel = _isFocused || status != PlaceSearchStatus.idle;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -110,13 +115,17 @@ class _NavSearchBarState extends State<NavSearchBar> {
           ),
           child: Row(
             children: [
-              const SizedBox(width: 14),
-              const Icon(
-                Icons.search_rounded,
-                color: AppColors.mutedText,
-                size: 22,
+              const SizedBox(width: 6),
+              // Search icon: tapping it submits the search like the keyboard key.
+              IconButton(
+                tooltip: 'Search',
+                icon: const Icon(
+                  Icons.search_rounded,
+                  color: AppColors.mutedText,
+                  size: 22,
+                ),
+                onPressed: () => _handleSubmitted(_textController.text),
               ),
-              const SizedBox(width: 10),
               Expanded(
                 child: TextField(
                   controller: _textController,
@@ -144,12 +153,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
                 IconButton(
                   icon: const Icon(Icons.close_rounded, size: 18),
                   color: AppColors.mutedLight,
-                  onPressed: () {
-                    _textController.clear();
-                    setState(() {
-                      _searchResults = [];
-                    });
-                  },
+                  onPressed: _clearSearch,
                 ),
               // Mic Icon (Voice Copilot placeholder)
               IconButton(
@@ -179,8 +183,8 @@ class _NavSearchBarState extends State<NavSearchBar> {
                     final initial = firstName.isNotEmpty
                         ? firstName[0].toUpperCase()
                         : (profile.fullName.isNotEmpty
-                            ? profile.fullName[0].toUpperCase()
-                            : '');
+                              ? profile.fullName[0].toUpperCase()
+                              : '');
 
                     Widget avatarChild;
                     if (profile.avatarPath != null &&
@@ -247,7 +251,7 @@ class _NavSearchBarState extends State<NavSearchBar> {
         ),
 
         // ── Dropdown Overlay for Suggestions, Recents & Saved Places ─────────
-        if (_isFocused) ...[
+        if (showPanel) ...[
           const SizedBox(height: 8),
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -265,55 +269,76 @@ class _NavSearchBarState extends State<NavSearchBar> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(20),
-              child: ListView(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                shrinkWrap: true,
-                children: [
-                  if (_isSearching)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    )
-                  else if (_searchResults.isNotEmpty) ...[
-                    _buildSectionHeader('SEARCH RESULTS'),
-                    ..._searchResults.map(_buildPlaceTile),
-                  ] else ...[
-                    if (widget.controller.savedPlaces.isNotEmpty) ...[
-                      _buildSectionHeader('SAVED PLACES'),
-                      ...widget.controller.savedPlaces.map(_buildPlaceTile),
-                    ],
-                    if (widget.controller.recentPlaces.isNotEmpty) ...[
-                      _buildSectionHeader('RECENT SEARCHES'),
-                      ...widget.controller.recentPlaces.map(_buildPlaceTile),
-                    ],
-                    if (widget.controller.savedPlaces.isEmpty &&
-                        widget.controller.recentPlaces.isEmpty)
+              // Transparent Material so the ListTiles' ink/splash can paint
+              // above the white DecoratedBox instead of being hidden by it.
+              child: Material(
+                color: Colors.transparent,
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shrinkWrap: true,
+                  children: [
+                    if (status == PlaceSearchStatus.loading)
                       const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                        padding: EdgeInsets.all(16),
                         child: Center(
-                          child: Text(
-                            'No saved places or recent searches',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.mutedLight,
-                            ),
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
                         ),
-                      ),
+                      )
+                    else if (status == PlaceSearchStatus.results) ...[
+                      _buildSectionHeader('SEARCH RESULTS'),
+                      ...widget.controller.searchResults.map(_buildPlaceTile),
+                    ] else if (status == PlaceSearchStatus.empty)
+                      _buildMessage(
+                        'No results. Try a different spelling or add the city.',
+                      )
+                    else if (status == PlaceSearchStatus.failed)
+                      _buildMessage(
+                        "Couldn't search. Check your internet connection.",
+                      )
+                    else ...[
+                      if (widget.controller.savedPlaces.isNotEmpty) ...[
+                        _buildSectionHeader('SAVED PLACES'),
+                        ...widget.controller.savedPlaces.map(_buildPlaceTile),
+                      ],
+                      if (widget.controller.recentPlaces.isNotEmpty) ...[
+                        _buildSectionHeader('RECENT SEARCHES'),
+                        ...widget.controller.recentPlaces.map(_buildPlaceTile),
+                      ],
+                      // Only when the field is empty and no search is running.
+                      if (fieldEmpty &&
+                          widget.controller.savedPlaces.isEmpty &&
+                          widget.controller.recentPlaces.isEmpty)
+                        _buildMessage('No saved places or recent searches'),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),
         ],
       ],
+    );
+  }
+
+  /// Centered grey status line inside the dropdown (empty / error states).
+  Widget _buildMessage(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      child: Center(
+        child: Text(
+          text,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            color: AppColors.mutedLight,
+          ),
+        ),
+      ),
     );
   }
 
@@ -348,15 +373,15 @@ class _NavSearchBarState extends State<NavSearchBar> {
           color: AppColors.darkCharcoal,
         ),
       ),
-      subtitle: Text(
-        place.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          fontSize: 12,
-          color: AppColors.mutedText,
-        ),
-      ),
+      // Short address line (area, city) instead of the full display name.
+      subtitle: place.shortAddress.isEmpty
+          ? null
+          : Text(
+              place.shortAddress,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: AppColors.mutedText),
+            ),
       onTap: () => _selectPlace(place),
     );
   }

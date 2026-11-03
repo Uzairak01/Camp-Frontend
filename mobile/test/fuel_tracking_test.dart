@@ -189,7 +189,7 @@ void main() {
 
       expect(fuelTracker.rideDistanceKm, greaterThan(1.0));
       expect(bikeController.activeBike!.preciseOdometerKm, greaterThan(initialOdo));
-      expect(bikeController.activeBike!.fuelRemainingLiters, lessThan(initialFuel));
+      expect(FuelEstimator.currentLiters(bikeController.activeBike!), lessThan(initialFuel));
     });
 
     test('Crossing 15% fires exactly one notification trigger; refilling resets it', () async {
@@ -197,6 +197,7 @@ void main() {
       // Starting fuel: 2.5 L (15.625% > 15%).
       final bike = bikeController.activeBike!.copyWith(
         fuelRemainingLiters: 2.5,
+        fuelLevelOdometerKm: bikeController.activeBike!.preciseOdometerKm,
         fuelAverageKmPerLiter: 20.0,
       );
       bikeController.updateBike(bike);
@@ -222,7 +223,7 @@ void main() {
         timestamp: DateTime(2026, 1, 1, 10, 4, 0),
       ));
 
-      expect(bikeController.activeBike!.fuelRemainingLiters, lessThan(2.4));
+      expect(FuelEstimator.currentLiters(bikeController.activeBike!), lessThan(2.4));
       expect(fakeNotification.alertCount, 1);
       expect(fakeNotification.lastRangeKm, isNotNull);
 
@@ -241,6 +242,7 @@ void main() {
       fuelTracker.resetLowFuelFlag();
       final refilledBike = bikeController.activeBike!.copyWith(
         fuelRemainingLiters: 10.0,
+        fuelLevelOdometerKm: bikeController.activeBike!.preciseOdometerKm,
       );
       bikeController.updateBike(refilledBike);
       expect(fuelTracker.hasShownLowFuelNotification, isFalse);
@@ -248,6 +250,7 @@ void main() {
       // Drop again below 15% (set to 2.45 L)
       final lowBike = bikeController.activeBike!.copyWith(
         fuelRemainingLiters: 2.45,
+        fuelLevelOdometerKm: bikeController.activeBike!.preciseOdometerKm,
       );
       bikeController.updateBike(lowBike);
 

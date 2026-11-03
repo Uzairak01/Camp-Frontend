@@ -203,7 +203,54 @@ class _BikeDetailsScreenState extends State<BikeDetailsScreen> {
     HapticFeedback.mediumImpact();
     final completedBike = _controller.buildBike(id: widget.initialBike?.id);
     if (widget.initialBike != null) {
-      ActiveBikeController.instance.updateBike(completedBike);
+      final initial = widget.initialBike!;
+      final oldOdo = initial.odometerKm;
+      final newOdo = completedBike.odometerKm;
+      final diff = newOdo - oldOdo;
+      final initialBaseOdo = initial.fuelLevelOdometerKm ?? oldOdo.toDouble();
+      final adjustedBaseOdo =
+          (newOdo < initialBaseOdo) ? newOdo.toDouble() : initialBaseOdo;
+
+      final mergedBike = initial.copyWith(
+        make: completedBike.make,
+        modelName: completedBike.modelName,
+        modelYear: completedBike.modelYear,
+        displacement: completedBike.displacement,
+        bikeType: completedBike.bikeType,
+        fuelSystem: completedBike.fuelSystem,
+        carburetorType: completedBike.carburetorType,
+        fuelTankCapacityLiters: completedBike.fuelTankCapacityLiters,
+        fuelAverageKmPerLiter: completedBike.fuelAverageKmPerLiter,
+        odometerKm: newOdo,
+        preciseOdometerKm: newOdo.toDouble(),
+        fuelLevelOdometerKm: adjustedBaseOdo,
+        vin: completedBike.vin,
+        nickname: completedBike.nickname,
+        plateNumber: completedBike.plateNumber,
+        color: completedBike.color,
+        imagePath: completedBike.imagePath ?? initial.imagePath,
+        lastUpdated: DateTime.now(),
+      );
+      ActiveBikeController.instance.updateBike(mergedBike);
+
+      if (diff > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Odometer up by $diff km. Fuel estimate adjusted.',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            backgroundColor: AppColors.darkCharcoal,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     } else {
       ActiveBikeController.instance.addBike(completedBike, setActive: true);
     }
@@ -1071,8 +1118,21 @@ class _BikeDetailsScreenState extends State<BikeDetailsScreen> {
               final cleaned = val.replaceAll(RegExp(r'[^\d]'), '');
               final parsed = int.tryParse(cleaned);
               _controller.setOdometerKm(parsed);
+              setState(() {});
             },
           ),
+          if (widget.initialBike != null &&
+              (_controller.odometerKm ?? 0) > widget.initialBike!.odometerKm) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Odometer up by ${(_controller.odometerKm ?? 0) - widget.initialBike!.odometerKm} km. Fuel estimate adjusted.',
+              style: GoogleFonts.manrope(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.tacticalOrange,
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
 
           // Current Fuel Level (Optional)

@@ -592,7 +592,8 @@ class _BikeProfileScreenState extends State<BikeProfileScreen> {
             : 'Mechanical');
 
     final tankCapacity = bike.fuelTankCapacityLiters;
-    final liters = bike.fuelRemainingLiters;
+    final liters =
+        FuelEstimator.currentLiters(bike) ?? bike.fuelRemainingLiters;
     final range = FuelEstimator.rangeKm(liters, bike.fuelAverageKmPerLiter);
     final tankTitle = tankCapacity != null
         ? (liters != null

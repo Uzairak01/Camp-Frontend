@@ -25,6 +25,7 @@ class LabeledTextField extends StatelessWidget {
     this.trailingWidget,
     this.rightLabelWidget,
     this.readOnly = false,
+    this.obscureText = false,
     this.onTap,
     this.onChanged,
     this.maxLines = 1,
@@ -48,6 +49,7 @@ class LabeledTextField extends StatelessWidget {
   final Widget? trailingWidget;
   final Widget? rightLabelWidget;
   final bool readOnly;
+  final bool obscureText;
   final VoidCallback? onTap;
   final ValueChanged<String>? onChanged;
   final int maxLines;
@@ -151,6 +153,7 @@ class LabeledTextField extends StatelessWidget {
                   controller: controller,
                   keyboardType: keyboardType,
                   readOnly: readOnly,
+                  obscureText: obscureText,
                   onTap: onTap,
                   onChanged: onChanged,
                   maxLines: maxLines,

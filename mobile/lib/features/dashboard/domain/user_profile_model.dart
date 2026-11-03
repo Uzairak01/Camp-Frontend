@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import 'emergency_contact_model.dart';
+import 'emergency_phone_helper.dart';
+
 /// Persisted user profile domain model with stable ID, createdAt, and updatedAt.
 @immutable
 class UserProfile {
@@ -18,9 +21,10 @@ class UserProfile {
     this.experienceIndex = 2,
     Set<String>? ridingStyles,
     this.unitIndex = 0,
-    this.emergencyContactName,
-    this.emergencyContactRelation,
-    this.emergencyContactPhone,
+    List<EmergencyContact>? emergencyContacts,
+    String? emergencyContactName,
+    String? emergencyContactRelation,
+    String? emergencyContactPhone,
     String? bloodGroup,
     this.allergies,
     this.medicalNotes,
@@ -28,7 +32,23 @@ class UserProfile {
         createdAt = (createdAt ?? DateTime.now()).toUtc(),
         updatedAt = (updatedAt ?? DateTime.now()).toUtc(),
         ridingStyles = ridingStyles ?? const {'Touring'},
-        bloodGroup = normalizeBloodType(bloodGroup);
+        bloodGroup = normalizeBloodType(bloodGroup),
+        emergencyContacts = (emergencyContacts != null && emergencyContacts.isNotEmpty)
+            ? List.unmodifiable(emergencyContacts)
+            : ((emergencyContactPhone != null && emergencyContactPhone.trim().isNotEmpty) ||
+                    (emergencyContactName != null && emergencyContactName.trim().isNotEmpty) ||
+                    (emergencyContactRelation != null && emergencyContactRelation.trim().isNotEmpty))
+                ? List.unmodifiable([
+                    EmergencyContact(
+                      id: 'ec_migrated_primary',
+                      name: (emergencyContactName ?? '').trim(),
+                      relation: (emergencyContactRelation ?? '').trim(),
+                      phone: (emergencyContactPhone ?? '').trim(),
+                      createdAt: (createdAt ?? DateTime.now()).toUtc(),
+                      updatedAt: (updatedAt ?? DateTime.now()).toUtc(),
+                    ),
+                  ])
+                : const [];
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     DateTime? parseUtc(dynamic val) {
@@ -43,6 +63,35 @@ class UserProfile {
     Set<String> styles = {'Touring'};
     if (json['ridingStyles'] is List) {
       styles = (json['ridingStyles'] as List).cast<String>().toSet();
+    }
+
+    // Deserialise emergency contacts list (supporting tolerant types)
+    List<EmergencyContact> contacts = [];
+    if (json['emergencyContacts'] is List) {
+      contacts = (json['emergencyContacts'] as List)
+          .whereType<Map<dynamic, dynamic>>()
+          .map((c) => EmergencyContact.fromJson(Map<String, dynamic>.from(c)))
+          .toList();
+    }
+
+    // One-time migration: convert legacy single emergency contact fields into
+    // the first EmergencyContact if list was missing/empty.
+    if (contacts.isEmpty) {
+      final legacyPhone = json['emergencyContactPhone']?.toString().trim() ?? '';
+      final legacyName = json['emergencyContactName']?.toString().trim() ?? '';
+      final legacyRelation = json['emergencyContactRelation']?.toString().trim() ?? '';
+      if (legacyPhone.isNotEmpty || legacyName.isNotEmpty) {
+        contacts = [
+          EmergencyContact(
+            id: 'ec_migrated_primary',
+            name: legacyName.isNotEmpty ? legacyName : 'Emergency Contact',
+            relation: legacyRelation,
+            phone: EmergencyPhoneHelper.migrateLegacyPhoneNumber(legacyPhone),
+            createdAt: created,
+            updatedAt: updated,
+          ),
+        ];
+      }
     }
 
     return UserProfile(
@@ -60,9 +109,7 @@ class UserProfile {
       experienceIndex: (json['experienceIndex'] as num?)?.toInt() ?? 2,
       ridingStyles: styles,
       unitIndex: (json['unitIndex'] as num?)?.toInt() ?? 0,
-      emergencyContactName: json['emergencyContactName'] as String?,
-      emergencyContactRelation: json['emergencyContactRelation'] as String?,
-      emergencyContactPhone: json['emergencyContactPhone'] as String?,
+      emergencyContacts: contacts,
       bloodGroup: json['bloodGroup'] as String?,
       allergies: json['allergies'] as String?,
       medicalNotes: (json['medicalNotes'] ?? json['medical_notes']) as String?,
@@ -125,9 +172,21 @@ class UserProfile {
   final Set<String> ridingStyles;
   final int unitIndex;
 
-  final String? emergencyContactName;
-  final String? emergencyContactRelation;
-  final String? emergencyContactPhone;
+  /// Emergency contacts list (maximum 5 saved per rider).
+  final List<EmergencyContact> emergencyContacts;
+
+  /// Backwards-compatible getter for primary emergency contact name.
+  String get emergencyContactName =>
+      emergencyContacts.isNotEmpty ? emergencyContacts.first.name : '';
+
+  /// Backwards-compatible getter for primary emergency contact relationship.
+  String get emergencyContactRelation =>
+      emergencyContacts.isNotEmpty ? emergencyContacts.first.relation : '';
+
+  /// Backwards-compatible getter for primary emergency contact phone number.
+  String get emergencyContactPhone =>
+      emergencyContacts.isNotEmpty ? emergencyContacts.first.phone : '';
+
   final String bloodGroup;
   final String? allergies;
   final String? medicalNotes;
@@ -147,6 +206,7 @@ class UserProfile {
     int? experienceIndex,
     Set<String>? ridingStyles,
     int? unitIndex,
+    List<EmergencyContact>? emergencyContacts,
     String? emergencyContactName,
     String? emergencyContactRelation,
     String? emergencyContactPhone,
@@ -154,6 +214,21 @@ class UserProfile {
     String? allergies,
     String? medicalNotes,
   }) {
+    List<EmergencyContact>? contacts = emergencyContacts;
+    if (contacts == null &&
+        (emergencyContactName != null ||
+            emergencyContactPhone != null ||
+            emergencyContactRelation != null)) {
+      contacts = [
+        EmergencyContact(
+          id: 'ec_migrated_primary',
+          name: (emergencyContactName ?? this.emergencyContactName).trim(),
+          relation: (emergencyContactRelation ?? this.emergencyContactRelation).trim(),
+          phone: (emergencyContactPhone ?? this.emergencyContactPhone).trim(),
+        ),
+      ];
+    }
+
     return UserProfile(
       id: id ?? this.id,
       createdAt: createdAt ?? this.createdAt,
@@ -169,11 +244,7 @@ class UserProfile {
       experienceIndex: experienceIndex ?? this.experienceIndex,
       ridingStyles: ridingStyles ?? this.ridingStyles,
       unitIndex: unitIndex ?? this.unitIndex,
-      emergencyContactName: emergencyContactName ?? this.emergencyContactName,
-      emergencyContactRelation:
-          emergencyContactRelation ?? this.emergencyContactRelation,
-      emergencyContactPhone:
-          emergencyContactPhone ?? this.emergencyContactPhone,
+      emergencyContacts: contacts ?? this.emergencyContacts,
       bloodGroup: bloodGroup ?? this.bloodGroup,
       allergies: allergies ?? this.allergies,
       medicalNotes: medicalNotes ?? this.medicalNotes,
@@ -195,9 +266,7 @@ class UserProfile {
         'experienceIndex': experienceIndex,
         'ridingStyles': ridingStyles.toList(),
         'unitIndex': unitIndex,
-        'emergencyContactName': emergencyContactName,
-        'emergencyContactRelation': emergencyContactRelation,
-        'emergencyContactPhone': emergencyContactPhone,
+        'emergencyContacts': emergencyContacts.map((c) => c.toJson()).toList(),
         'bloodGroup': bloodGroup,
         'allergies': allergies,
         'medicalNotes': medicalNotes,
@@ -220,9 +289,7 @@ class UserProfile {
           experienceIndex == other.experienceIndex &&
           setEquals(ridingStyles, other.ridingStyles) &&
           unitIndex == other.unitIndex &&
-          emergencyContactName == other.emergencyContactName &&
-          emergencyContactRelation == other.emergencyContactRelation &&
-          emergencyContactPhone == other.emergencyContactPhone &&
+          listEquals(emergencyContacts, other.emergencyContacts) &&
           bloodGroup == other.bloodGroup &&
           allergies == other.allergies &&
           medicalNotes == other.medicalNotes;
@@ -241,9 +308,7 @@ class UserProfile {
         experienceIndex,
         Object.hashAll(ridingStyles),
         unitIndex,
-        emergencyContactName,
-        emergencyContactRelation,
-        emergencyContactPhone,
+        Object.hashAll(emergencyContacts),
         bloodGroup,
         allergies,
         medicalNotes,

@@ -71,6 +71,19 @@ class PostRideReportController extends ChangeNotifier {
     save();
   }
 
+  /// Update an existing post-ride report in-place, preserving position in the list.
+  /// If the report does not exist in memory, it is inserted at the top.
+  void updateReport(PostRideReport updatedReport) {
+    final index = _reports.indexWhere((r) => r.id == updatedReport.id);
+    if (index != -1) {
+      _reports[index] = updatedReport;
+      notifyListeners();
+      save();
+    } else {
+      addReport(updatedReport);
+    }
+  }
+
   /// Insert a post-ride report at a specific index (used for undo operations).
   void insertReport(int index, PostRideReport report) {
     final clampedIndex = index.clamp(0, _reports.length);

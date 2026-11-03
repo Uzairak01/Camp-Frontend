@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../navigation/controllers/current_place_controller.dart';
 import '../../../navigation/domain/location_service.dart';
 
-/// Current Location Card with real GPS status and coordinates.
+/// Current Location Card with real GPS status, coordinates, and shared place name.
 ///
 /// Renamed from TelemetryStreamCard to SosLocationCard (#73).
-/// Displays real phone GPS fix coordinates, satellite fix status, and location preview.
+/// Displays real phone GPS fix coordinates, satellite fix status, and shared place label
+/// from [CurrentPlaceController] with zero-delay instant cold-start rendering.
 class SosLocationCard extends StatefulWidget {
+  /// Creates a [SosLocationCard].
   const SosLocationCard({
     super.key,
     this.locationService = const GeolocatorLocationService(),
   });
 
+  /// Injected location service for retrieving real device coordinates.
   final LocationService locationService;
 
   @override
@@ -50,94 +54,183 @@ class _SosLocationCardState extends State<SosLocationCard> {
 
   @override
   Widget build(BuildContext context) {
-    final pos = _position;
-    final isGpsReady = pos != null;
+    return ListenableBuilder(
+      listenable: CurrentPlaceController.instance,
+      builder: (context, _) {
+        final currentPlace = CurrentPlaceController.instance;
+        final pos = _position ?? currentPlace.lastKnownPosition;
+        final isGpsReady = pos != null;
+        final placeLabel = currentPlace.displayLabel;
 
-    final String coordText;
-    final String locationSubtitle;
-    if (_isLoading) {
-      coordText = 'Checking GPS status...';
-      locationSubtitle = 'Acquiring satellite fix from phone sensors';
-    } else if (pos != null) {
-      coordText = '${pos.latitude.toStringAsFixed(5)}°N, ${pos.longitude.toStringAsFixed(5)}°E';
-      locationSubtitle = 'Phone GPS fix acquired';
-    } else {
-      coordText = 'Coordinates not available';
-      locationSubtitle = 'Enable Location Services to view coordinates';
-    }
+        final String coordText;
+        if (pos != null) {
+          coordText =
+              '${pos.latitude.toStringAsFixed(5)}°N, ${pos.longitude.toStringAsFixed(5)}°E';
+        } else if (_isLoading) {
+          coordText = 'Checking GPS status...';
+        } else {
+          coordText = 'Coordinates not available';
+        }
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Header Row ─────────────────────────────────────────────────
-          Row(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3E8),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.location_on_rounded,
-                    color: Color(0xFFFF8A00),
-                    size: 16,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Current Location',
-                  style: GoogleFonts.manrope(
-                    color: const Color(0xFF1E293B),
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isGpsReady ? const Color(0xFFD4F7E6) : const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isGpsReady ? const Color(0xFF059669) : const Color(0xFFD97706),
+              // ── Header Row ─────────────────────────────────────────────────
+              Row(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF3E8),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.location_on_rounded,
+                        color: Color(0xFFFF8A00),
+                        size: 16,
                       ),
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      isGpsReady ? 'GPS location: ready' : 'GPS location: waiting',
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Current Location',
                       style: GoogleFonts.manrope(
-                        color: isGpsReady ? const Color(0xFF059669) : const Color(0xFFB45309),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1E293B),
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isGpsReady
+                          ? const Color(0xFFD4F7E6)
+                          : const Color(0xFFFEF3C7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isGpsReady
+                                ? const Color(0xFF059669)
+                                : const Color(0xFFD97706),
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          isGpsReady
+                              ? 'GPS location: ready'
+                              : 'GPS location: waiting',
+                          style: GoogleFonts.manrope(
+                            color: isGpsReady
+                                ? const Color(0xFF059669)
+                                : const Color(0xFFB45309),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              // ── Location & Coordinates ─────────────────────────────────────
+              Text(
+                placeLabel,
+                style: GoogleFonts.manrope(
+                  color: const Color(0xFF1E293B),
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w800,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                coordText,
+                style: GoogleFonts.manrope(
+                  color: const Color(0xFF64748B),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              // ── Topographic Elevation Radar Box ────────────────────────────
+              Container(
+                height: 76,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F4F8),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // Topographic subtle wave curves
+                    CustomPaint(
+                      size: const Size(double.infinity, 76),
+                      painter: _TopographicCurvesPainter(),
+                    ),
+
+                    // Centered Pin
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isGpsReady
+                            ? const Color(0xFFE53935).withValues(alpha: 0.18)
+                            : const Color(0xFF94A3B8).withValues(alpha: 0.18),
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isGpsReady
+                                ? const Color(0xFFE53935)
+                                : const Color(0xFF94A3B8),
+                          ),
+                          child: const Center(
+                            child: Icon(
+                              Icons.gps_fixed_rounded,
+                              color: Colors.white,
+                              size: 13,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -145,81 +238,8 @@ class _SosLocationCardState extends State<SosLocationCard> {
               ),
             ],
           ),
-
-          const SizedBox(height: 14),
-
-          // ── Location & Coordinates ─────────────────────────────────────
-          Text(
-            coordText,
-            style: GoogleFonts.manrope(
-              color: const Color(0xFF1E293B),
-              fontSize: 14.5,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            locationSubtitle,
-            style: GoogleFonts.manrope(
-              color: const Color(0xFF64748B),
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ── Topographic Elevation Radar Box ────────────────────────────
-          Container(
-            height: 76,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: const Color(0xFFF1F4F8),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Topographic subtle wave curves
-                CustomPaint(
-                  size: const Size(double.infinity, 76),
-                  painter: _TopographicCurvesPainter(),
-                ),
-
-                // Centered Pin
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: isGpsReady
-                        ? const Color(0xFFE53935).withValues(alpha: 0.18)
-                        : const Color(0xFF94A3B8).withValues(alpha: 0.18),
-                  ),
-                  child: Center(
-                    child: Container(
-                      width: 22,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isGpsReady ? const Color(0xFFE53935) : const Color(0xFF94A3B8),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.gps_fixed_rounded,
-                          color: Colors.white,
-                          size: 13,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -280,4 +300,3 @@ class _TopographicCurvesPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
-

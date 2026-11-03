@@ -4,6 +4,7 @@ import 'app/routes.dart';
 import 'app/theme/app_theme.dart';
 import 'core/data/app_repositories.dart';
 import 'core/widgets/app_messenger.dart';
+import 'features/auth/controllers/auth_controller.dart';
 import 'features/auth/presentation/screens/forgot_password_screen.dart';
 import 'features/auth/presentation/screens/sign_in_screen.dart';
 import 'features/auth/presentation/screens/sign_up_screen.dart';
@@ -31,12 +32,14 @@ import 'features/mechanics/controllers/mechanic_controller.dart';
 import 'features/mechanics/domain/mechanic_model.dart';
 import 'features/mechanics/presentation/screens/add_mechanic_screen.dart';
 import 'features/mechanics/presentation/screens/mechanics_home_screen.dart';
+import 'features/navigation/controllers/current_place_controller.dart';
 import 'features/navigation/domain/geocoding_service.dart';
 import 'features/navigation/presentation/screens/navigation_map_screen.dart';
 import 'features/navigation/presentation/screens/route_packs_screen.dart';
 import 'features/ride_history/presentation/screens/ride_history_screen.dart';
 import 'features/settings/controllers/settings_controller.dart';
 import 'features/settings/presentation/screens/settings_screen.dart';
+import 'features/settings/presentation/screens/tracking_diagnostics_screen.dart';
 import 'features/voice_copilot/presentation/screens/voice_assistant_screen.dart';
 
 void main() async {
@@ -64,6 +67,12 @@ void main() async {
     } catch (_) {}
     try {
       await ServiceVisitController.instance.load(repos.serviceVisitRepository);
+    } catch (_) {}
+    try {
+      await AuthController.instance.load(repos.accountRepository);
+    } catch (_) {}
+    try {
+      await CurrentPlaceController.instance.initialize();
     } catch (_) {}
     try {
       if (await repos.bikeRepository.isFirstRun()) {
@@ -112,7 +121,9 @@ class _CampAppState extends State<CampApp> with WidgetsBindingObserver {
       scaffoldMessengerKey: rootScaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      initialRoute: CampRoutes.signIn,
+      initialRoute: AuthController.instance.isAuthenticated
+          ? CampRoutes.home
+          : CampRoutes.signIn,
       routes: {
         CampRoutes.home: (context) => const HomeScreen(),
         CampRoutes.signIn: (context) => const SignInScreen(),
@@ -157,6 +168,8 @@ class _CampAppState extends State<CampApp> with WidgetsBindingObserver {
         CampRoutes.emergencySos: (context) => const EmergencySosScreen(),
         CampRoutes.emergencyQr: (context) => const EmergencyQrScreen(),
         CampRoutes.weatherDetail: (context) => const WeatherDetailScreen(),
+        CampRoutes.trackingDiagnostics: (context) =>
+            const TrackingDiagnosticsScreen(),
       },
       onUnknownRoute: (settings) => MaterialPageRoute<void>(
         settings: settings,

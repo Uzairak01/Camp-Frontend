@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -17,6 +18,7 @@ import '../../../maintenance/domain/maintenance_item_model.dart';
 import '../../../maintenance/domain/post_ride_report.dart';
 import '../../../settings/controllers/settings_controller.dart';
 import '../../controllers/profile_controller.dart';
+import '../../domain/emergency_phone_helper.dart';
 import '../../domain/profile_stats.dart';
 import '../widgets/app_drawer_widget.dart';
 
@@ -1547,174 +1549,214 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 9. Rider Medical & SOS ID Card ─────────────────────────────────────────
   Widget _buildMedicalSosCard() {
-    return CampCard(
-      padding: const EdgeInsets.all(AppColors.cardPadding),
-      borderRadius: AppColors.radiusCard,
-      color: AppColors.clay,
-      shadows: AppColors.skeuRaised,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return ListenableBuilder(
+      listenable: ProfileController.instance,
+      builder: (context, _) {
+        final controller = ProfileController.instance;
+        final contacts = controller.emergencyContacts;
+        final primary = controller.primaryEmergencyContact;
+        final hasContacts = contacts.isNotEmpty;
+
+        return CampCard(
+          padding: const EdgeInsets.all(AppColors.cardPadding),
+          borderRadius: AppColors.radiusCard,
+          color: AppColors.clay,
+          shadows: AppColors.skeuRaised,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.add_rounded,
-                    size: 18,
-                    color: AppColors.alertRed,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'RIDER MEDICAL & SOS ID',
-                  style: GoogleFonts.manrope(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.darkCharcoal,
-                    letterSpacing: 0.3,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDCFCE7),
-                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                ),
-                child: Text(
-                  'System Armed',
-                  style: GoogleFonts.manrope(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.statusGreen,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _buildInfoKeyValueRow(
-            label: 'Emergency ICE:',
-            valueWidget: Text(
-              ProfileController.instance.emergencyContactName.isNotEmpty
-                  ? '${ProfileController.instance.emergencyContactName} (${ProfileController.instance.emergencyContactRelation}) • ${ProfileController.instance.emergencyContactPhone}'
-                  : 'Emergency Contact Not Set',
-              style: GoogleFonts.manrope(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.darkCharcoal,
-              ),
-              textAlign: TextAlign.right,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _buildInfoKeyValueRow(
-            label: 'Blood & Allergies:',
-            valueWidget: Builder(
-              builder: (context) {
-                final blood = ProfileController.instance.bloodGroup.trim();
-                final allergies = ProfileController.instance.allergies.trim();
-                if (blood.isEmpty && allergies.isEmpty) {
-                  return Text(
-                    'Not set',
-                    style: GoogleFonts.manrope(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.mutedText,
-                      fontStyle: FontStyle.italic,
-                    ),
-                    textAlign: TextAlign.right,
-                  );
-                }
-                return RichText(
-                  textAlign: TextAlign.right,
-                  text: TextSpan(
-                    style: GoogleFonts.manrope(fontSize: 11.5, fontWeight: FontWeight.w800),
-                    children: [
-                      if (blood.isNotEmpty)
-                        TextSpan(
-                          text: blood,
-                          style: const TextStyle(color: AppColors.alertRed),
-                        ),
-                      if (allergies.isNotEmpty)
-                        TextSpan(
-                          text: blood.isNotEmpty ? ' • $allergies' : allergies,
-                          style: const TextStyle(color: AppColors.darkCharcoal, fontWeight: FontWeight.w600),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 8),
-          _buildInfoKeyValueRow(
-            label: 'Emergency SOS Method:',
-            valueWidget: Text(
-              'Phone SMS & Dialer',
-              style: GoogleFonts.manrope(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.darkCharcoal,
-              ),
-              textAlign: TextAlign.right,
-            ),
-          ),
-          const SizedBox(height: 16),
-          // View Emergency Protocols button
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _showNotification('Emergency ICE & Health Protocols configured via device SMS and dialer'),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
-              decoration: BoxDecoration(
-                color: AppColors.clay,
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                border: Border.all(
-                  color: AppColors.alertRed.withValues(alpha: 0.35),
-                  width: 1.2,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Row(
                 children: [
-                  Flexible(
-                    child: Text(
-                      'View Emergency Protocols & Health Card',
-                      style: GoogleFonts.manrope(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEE2E2),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.add_rounded,
+                        size: 18,
                         color: AppColors.alertRed,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'RIDER MEDICAL & SOS ID',
+                      style: GoogleFonts.manrope(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.darkCharcoal,
+                        letterSpacing: 0.3,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: AppColors.alertRed,
-                  ),
+                  const SizedBox(width: 8),
+                  if (hasContacts)
+                    Container(
+                      key: const Key('badge_sos_ready'),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                      ),
+                      child: Text(
+                        'SOS ready',
+                        style: GoogleFonts.manrope(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.statusGreen,
+                        ),
+                      ),
+                    )
+                  else
+                    GestureDetector(
+                      key: const Key('badge_add_contact'),
+                      onTap: () => Navigator.of(context).pushNamed(CampRoutes.editProfile),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                          border: Border.all(color: const Color(0xFFFDE68A), width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.add_rounded, size: 11, color: AppColors.tacticalOrange),
+                            const SizedBox(width: 3),
+                            Text(
+                              'Add a contact',
+                              style: GoogleFonts.manrope(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.tacticalOrange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
-            ),
+              const SizedBox(height: 14),
+              _buildInfoKeyValueRow(
+                label: 'Emergency ICE:',
+                valueWidget: Text(
+                  hasContacts && primary != null
+                      ? '${primary.name}${primary.relation.isNotEmpty ? " (${primary.relation})" : ""} • ${EmergencyPhoneHelper.formatPhoneReadable(primary.phone)}${contacts.length > 1 ? " (+${contacts.length - 1} more)" : ""}'
+                      : 'Emergency Contact Not Set',
+                  style: GoogleFonts.manrope(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkCharcoal,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildInfoKeyValueRow(
+                label: 'Blood & Allergies:',
+                valueWidget: Builder(
+                  builder: (context) {
+                    final blood = controller.bloodGroup.trim();
+                    final allergies = controller.allergies.trim();
+                    if (blood.isEmpty && allergies.isEmpty) {
+                      return Text(
+                        'Not set',
+                        style: GoogleFonts.manrope(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.mutedText,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        textAlign: TextAlign.right,
+                      );
+                    }
+                    return RichText(
+                      textAlign: TextAlign.right,
+                      text: TextSpan(
+                        style: GoogleFonts.manrope(fontSize: 11.5, fontWeight: FontWeight.w800),
+                        children: [
+                          if (blood.isNotEmpty)
+                            TextSpan(
+                              text: blood,
+                              style: const TextStyle(color: AppColors.alertRed),
+                            ),
+                          if (allergies.isNotEmpty)
+                            TextSpan(
+                              text: blood.isNotEmpty ? ' • $allergies' : allergies,
+                              style: const TextStyle(color: AppColors.darkCharcoal, fontWeight: FontWeight.w600),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildInfoKeyValueRow(
+                label: 'Emergency SOS Method:',
+                valueWidget: Text(
+                  'Phone SMS & Dialer',
+                  style: GoogleFonts.manrope(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkCharcoal,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // View Emergency Protocols button
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _showNotification('Emergency ICE & Health Protocols configured via device SMS and dialer'),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.clay,
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                    border: Border.all(
+                      color: AppColors.alertRed.withValues(alpha: 0.35),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          'View Emergency Protocols & Health Card',
+                          style: GoogleFonts.manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.alertRed,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppColors.alertRed,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1848,6 +1890,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
                   ),
+                  if (kDebugMode) ...[
+                    const Divider(height: 1, color: Color(0x12000000)),
+                    _buildSettingsRow(
+                      key: const ValueKey('profile_tracking_diagnostics_row'),
+                      icon: Icons.bug_report_rounded,
+                      title: 'Tracking diagnostics (debug)',
+                      subtitle: 'Inspect live location fixes & filters',
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                      onTap: () => Navigator.of(context).pushNamed(CampRoutes.trackingDiagnostics),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1861,11 +1914,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required String title,
     required Widget trailing,
     required VoidCallback onTap,
+    Key? key,
     IconData? icon,
     Widget? customLeading,
     String? subtitle,
   }) {
     return GestureDetector(
+      key: key,
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
@@ -2001,7 +2056,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
 
     if (confirmed == true && mounted) {
-      AuthController.instance.signOut();
+      await AuthController.instance.signOut();
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(
         CampRoutes.signIn,

@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/routes.dart';
+import '../../../../app/theme/app_colors.dart';
 import '../../../dashboard/controllers/profile_controller.dart';
+import '../../../dashboard/domain/emergency_phone_helper.dart';
 import '../../../navigation/domain/location_service.dart';
 import '../../domain/emergency_sos_helpers.dart';
+import 'alert_contacts_bottom_sheet.dart';
 
 /// Card 4: Emergency Contact Card showing rider's saved contact from Profile,
 /// with "Call my contact" and "Alert my contacts" SMS composer with GPS link.
@@ -25,8 +28,27 @@ class EmergencyContactCard extends StatefulWidget {
 class _EmergencyContactCardState extends State<EmergencyContactCard> {
   bool _isLocatingForSms = false;
 
-  Future<void> _handleAlertContacts(BuildContext context, String phone) async {
+  Future<void> _handleAlertContacts(BuildContext context) async {
     if (_isLocatingForSms) return;
+    final contacts = ProfileController.instance.emergencyContacts;
+    if (contacts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No emergency contact saved. Please add one in your profile.',
+            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+          ),
+          backgroundColor: AppColors.tacticalOrange,
+          action: SnackBarAction(
+            label: 'Add',
+            textColor: Colors.white,
+            onPressed: () => _navigateToEditProfile(context),
+          ),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isLocatingForSms = true);
 
     PositionData? position;
@@ -41,7 +63,16 @@ class _EmergencyContactCardState extends State<EmergencyContactCard> {
     }
 
     final body = buildEmergencySmsBody(position);
-    await launchSms(phone, body);
+
+    // Always show the Alert Contacts sheet (also for a single contact) so the rider
+    // chooses SMS, WhatsApp or another app explicitly.
+    if (context.mounted) {
+      await AlertContactsBottomSheet.show(
+        context,
+        contacts: contacts,
+        messageBody: body,
+      );
+    }
   }
 
   void _handleCallContact(String phone) {
@@ -62,11 +93,13 @@ class _EmergencyContactCardState extends State<EmergencyContactCard> {
       listenable: ProfileController.instance,
       builder: (context, _) {
         final profile = ProfileController.instance;
-        final name = profile.emergencyContactName.trim();
-        final relation = profile.emergencyContactRelation.trim();
-        final phone = profile.emergencyContactPhone.trim();
+        final contacts = profile.emergencyContacts;
+        final primary = profile.primaryEmergencyContact;
+        final hasContact = primary != null && primary.phone.trim().isNotEmpty;
 
-        final hasContact = phone.isNotEmpty;
+        final name = primary?.name.trim() ?? '';
+        final relation = primary?.relation.trim() ?? '';
+        final phone = primary?.phone.trim() ?? '';
 
         return Container(
           decoration: BoxDecoration(
@@ -255,13 +288,24 @@ class _EmergencyContactCardState extends State<EmergencyContactCard> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            phone,
+                            EmergencyPhoneHelper.formatPhoneReadable(phone),
                             style: GoogleFonts.manrope(
                               color: const Color(0xFF1E293B),
                               fontSize: 13,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
+                          if (contacts.length > 1) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              '+${contacts.length - 1} more contact${contacts.length > 2 ? 's' : ''} will be alerted',
+                              style: GoogleFonts.manrope(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFF0284C7),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -319,7 +363,7 @@ class _EmergencyContactCardState extends State<EmergencyContactCard> {
                     // Alert my contacts (SMS with GPS) Button
                     Expanded(
                       child: GestureDetector(
-                        onTap: () => _handleAlertContacts(context, phone),
+                        onTap: () => _handleAlertContacts(context),
                         child: Container(
                           height: 44,
                           decoration: BoxDecoration(

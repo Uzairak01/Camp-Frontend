@@ -1,4 +1,9 @@
+import '../../../core/data/account_model.dart';
+
 /// CAMP Rider User Model representing an authenticated rider profile.
+///
+/// Contains user identity details loaded from the active [AccountModel].
+/// No hardcoded default account exists.
 class RiderUser {
   /// Creates an immutable rider user instance.
   const RiderUser({
@@ -6,11 +11,19 @@ class RiderUser {
     required this.name,
     required this.email,
     required this.phone,
-    this.callSign = 'Ghost Rider',
-    this.telemetryActive = true,
-    this.biometricEnabled = true,
     this.memberSince,
   });
+
+  /// Factory creating an authenticated [RiderUser] from an [AccountModel].
+  factory RiderUser.fromAccount(AccountModel account) {
+    return RiderUser(
+      id: account.id,
+      name: account.name,
+      email: account.email,
+      phone: account.phone,
+      memberSince: account.createdAt,
+    );
+  }
 
   /// Unique rider identifier.
   final String id;
@@ -24,29 +37,8 @@ class RiderUser {
   /// Contact telephone number.
   final String phone;
 
-  /// Radio/community call sign handle.
-  final String callSign;
-
-  /// Whether offline telemetry logging is active.
-  final bool telemetryActive;
-
-  /// Whether biometric sign-in is supported/enabled.
-  final bool biometricEnabled;
-
   /// Registration date of the rider account.
   final DateTime? memberSince;
-
-  /// Default baseline rider profile.
-  static RiderUser defaultRider = RiderUser(
-    id: 'RIDER-441-MX',
-    name: 'Alex Henderson',
-    email: 'moto.rider@example.com',
-    phone: '+1 (555) 019–2834',
-    callSign: 'Apex Navigator',
-    telemetryActive: true,
-    biometricEnabled: true,
-    memberSince: DateTime(2024, 3, 15),
-  );
 
   /// Creates a copy of this rider with updated fields.
   RiderUser copyWith({
@@ -54,9 +46,6 @@ class RiderUser {
     String? name,
     String? email,
     String? phone,
-    String? callSign,
-    bool? telemetryActive,
-    bool? biometricEnabled,
     DateTime? memberSince,
   }) {
     return RiderUser(
@@ -64,9 +53,6 @@ class RiderUser {
       name: name ?? this.name,
       email: email ?? this.email,
       phone: phone ?? this.phone,
-      callSign: callSign ?? this.callSign,
-      telemetryActive: telemetryActive ?? this.telemetryActive,
-      biometricEnabled: biometricEnabled ?? this.biometricEnabled,
       memberSince: memberSince ?? this.memberSince,
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -28,7 +29,14 @@ import '../widgets/settings_row_widget.dart';
 /// Serves as the application's single source of truth for Notifications,
 /// Language, Storage metrics, and Emergency preferences.
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({
+    super.key,
+    this.isDebugMode = kDebugMode,
+  });
+
+  /// Whether debug-only features (such as tracking diagnostics) should be presented.
+  /// Defaults to [kDebugMode] and can be overridden in widget tests.
+  final bool isDebugMode;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -233,7 +241,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ? const Icon(Icons.check_circle_rounded, color: AppColors.tacticalOrange)
                     : null,
                 onTap: () {
-                  Navigator.of(ctx).pop();
+              Navigator.of(ctx).pop();
                   _showCustomEmergencyDialog(settings);
                 },
               ),
@@ -302,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               backgroundColor: AppColors.tacticalOrange,
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
+            onPressed: () async {
               final text = controller.text.trim();
               if (text.isNotEmpty) {
                 settings.setEmergencyNumber(text);
@@ -369,7 +377,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           if (settings.fuelPricePerLiter != null)
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 settings.setFuelPricePerLiter(null);
                 Navigator.of(dialogCtx).pop();
                 _showNotification('Fuel price cleared');
@@ -384,7 +392,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               backgroundColor: AppColors.tacticalOrange,
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
+            onPressed: () async {
               final text = controller.text.trim();
               final parsed = parsePkr(text);
               if (parsed != null && parsed > 0) {
@@ -627,10 +635,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           ElevatedButton(
-            onPressed: () {
+            onPressed: () async {
+              final navigator = Navigator.of(context);
               Navigator.of(ctx).pop();
-              AuthController.instance.signOut();
-              Navigator.of(context).pushNamedAndRemoveUntil(
+              await AuthController.instance.signOut();
+              navigator.pushNamedAndRemoveUntil(
                 CampRoutes.signIn,
                 (route) => false,
               );
@@ -1154,6 +1163,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onTap: () => _showAboutDialog(settings),
           ),
+          if (widget.isDebugMode) ...[
+            const Divider(height: 1, color: Color(0x10000000)),
+            SettingsRowWidget(
+              key: const ValueKey('settings_tracking_diagnostics_row'),
+              icon: Icons.bug_report_rounded,
+              title: 'Tracking diagnostics (debug)',
+              subtitle: 'Inspect live location fixes & filters',
+              trailing: const Icon(
+                Icons.chevron_right_rounded,
+                color: AppColors.mutedLight,
+                size: 20,
+              ),
+              onTap: () {
+                Navigator.of(context).pushNamed(CampRoutes.trackingDiagnostics);
+              },
+            ),
+          ],
         ],
       ),
     );

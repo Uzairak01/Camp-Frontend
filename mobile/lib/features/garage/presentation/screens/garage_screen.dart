@@ -282,7 +282,8 @@ class GarageScreen extends StatelessWidget {
   // 3. Active Bike Card
   // ──────────────────────────────────────────────────────────────────────────
   Widget _buildActiveBikeCard(BuildContext context, Bike bike) {
-    final liters = bike.fuelRemainingLiters;
+    final liters =
+        FuelEstimator.currentLiters(bike) ?? bike.fuelRemainingLiters;
     final tankCap = bike.fuelTankCapacityLiters;
     final fuelAvg = bike.fuelAverageKmPerLiter;
     final rangeKm = FuelEstimator.rangeKm(liters, fuelAvg);

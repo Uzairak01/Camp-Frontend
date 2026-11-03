@@ -93,7 +93,9 @@ void main() {
       // 3. Last done block
       expect(find.text('When did you last do this?'), findsWidgets);
       expect(find.text('LAST DONE'), findsNothing);
-      expect(find.text('Odometer (km)'), findsWidgets);
+      expect(find.text('About __ km ago'), findsWidgets);
+      expect(find.text('At odometer __ km'), findsWidgets);
+      expect(find.text('Km since you did it'), findsWidgets);
       expect(find.text('Date'), findsWidgets);
 
       // 4. "standard interval" text must NOT appear anywhere

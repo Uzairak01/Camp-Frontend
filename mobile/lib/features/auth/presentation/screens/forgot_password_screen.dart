@@ -9,7 +9,11 @@ import '../widgets/auth_card.dart';
 import '../widgets/auth_primary_button.dart';
 import '../widgets/auth_text_field.dart';
 
-/// CAMP Forgot Password Screen
+/// CAMP Forgot Password Screen.
+///
+/// Provides an honest offline recovery view. Since online backends are not yet
+/// integrated, this screen informs the rider that email recovery will be available
+/// with online accounts, rather than claiming a reset email was dispatched.
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
 
@@ -18,7 +22,7 @@ class ForgotPasswordScreen extends StatefulWidget {
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
-  final _emailController = TextEditingController(text: 'moto.rider@example.com');
+  final _emailController = TextEditingController();
   bool _isLoading = false;
   bool _submitted = false;
 
@@ -46,11 +50,13 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-            color: isError ? Colors.redAccent : AuthColors.orangeBadgeBorder,
+            color: isError
+                ? Colors.redAccent
+                : AuthColors.orangeBadgeBorder,
             width: 1,
           ),
         ),
-        duration: const Duration(milliseconds: 2400),
+        duration: const Duration(milliseconds: 3200),
       ),
     );
   }
@@ -58,7 +64,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Future<void> _handleReset() async {
     final email = _emailController.text.trim();
     if (email.isEmpty) {
-      _showNotification('Please enter your Rider ID or email.', isError: true);
+      _showNotification('Please enter your email address.', isError: true);
       return;
     }
 
@@ -72,7 +78,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       _submitted = true;
     });
 
-    _showNotification('Telemetry recovery instructions dispatched!');
+    _showNotification(
+      'Password reset by email will be available when online accounts are added.',
+    );
   }
 
   @override
@@ -80,7 +88,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     return AuthBackgroundScaffold(
       topBar: AuthBrandHeader.signUp(
         onBack: () => Navigator.of(context).maybePop(),
-        onSyncTap: () => _showNotification('Recovery Server: Operational'),
       ),
       bottomBar: Padding(
         padding: const EdgeInsets.only(bottom: 20),
@@ -160,8 +167,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     const SizedBox(height: 6),
                     Text(
                       _submitted
-                          ? 'Check your inbox for the password reset link to securely reset your credentials.'
-                          : 'Enter your Rider ID or email to receive password reset instructions.',
+                          ? 'Password reset by email will be available when online accounts are added.'
+                          : 'Enter your account email to receive password reset instructions.',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.manrope(
                         color: AuthColors.textSubtitle,
@@ -175,26 +182,59 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
                     if (!_submitted) ...[
                       AuthTextField(
-                        label: 'Rider ID or Email',
+                        label: 'Email Address',
                         controller: _emailController,
-                        hintText: 'moto.rider@example.com',
+                        hintText: 'Email',
                         prefixIcon: Icons.mail_outline_rounded,
                         keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.done,
                         onSubmitted: (_) => _handleReset(),
                       ),
-
                       const SizedBox(height: 22),
-
                       AuthPrimaryButton(
-                        label: 'Send Recovery Link',
+                        label: 'Request Password Reset',
                         isLoading: _isLoading,
                         onTap: _handleReset,
                       ),
                     ] else ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 14,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.15),
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.info_outline_rounded,
+                              color: AuthColors.orangeLight,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Password reset by email will be available when online accounts are added.',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.35,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
                       AuthPrimaryButton(
-                        label: 'Return to Sign In',
-                        icon: Icons.arrow_back_rounded,
+                        label: 'Back to Sign In',
                         onTap: () => Navigator.of(context).maybePop(),
                       ),
                     ],

@@ -47,6 +47,7 @@ abstract class LocationService {
   Future<bool> checkPermission();
   Future<bool> requestPermission();
   Future<PositionData?> getCurrentPosition();
+  Future<PositionData?> getLastKnownPosition();
   Stream<PositionData> getPositionStream({
     bool highAccuracy = false,
     bool enableForegroundNotification = false,
@@ -116,6 +117,17 @@ class GeolocatorLocationService implements LocationService {
         final last = await Geolocator.getLastKnownPosition();
         if (last != null) return _mapPosition(last);
       } catch (_) {}
+      return null;
+    }
+  }
+
+  @override
+  Future<PositionData?> getLastKnownPosition() async {
+    if (_isTesting) return null;
+    try {
+      final pos = await Geolocator.getLastKnownPosition();
+      return pos != null ? _mapPosition(pos) : null;
+    } catch (_) {
       return null;
     }
   }

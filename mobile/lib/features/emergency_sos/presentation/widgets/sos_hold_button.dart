@@ -8,13 +8,14 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../dashboard/controllers/profile_controller.dart';
 import '../../../navigation/domain/location_service.dart';
 import '../../domain/emergency_sos_helpers.dart';
+import 'alert_contacts_bottom_sheet.dart';
 
 /// Top card containing the 3D Tactile SOS Button & real GPS status indicator.
 ///
 /// Renamed from HardwareTelematicsCard to SosHoldButton (#73).
 /// Detects a continuous 3-second press, shows an animated countdown ring,
-/// vibrates the phone, and opens the native SMS app pre-filled with the rider's
-/// emergency contact number and current phone GPS coordinates.
+/// vibrates the phone, and opens the Alert Contacts sheet pre-filled with the current
+/// phone GPS link so the rider picks SMS, WhatsApp or another app per contact.
 class SosHoldButton extends StatefulWidget {
   const SosHoldButton({
     super.key,
@@ -118,8 +119,9 @@ class _SosHoldButtonState extends State<SosHoldButton>
     HapticFeedback.vibrate();
     setState(() => _isHolding = false);
 
-    final phone = ProfileController.instance.emergencyContactPhone.trim();
-    if (phone.isEmpty) {
+    final contacts = ProfileController.instance.emergencyContacts;
+    final numbers = contacts.map((c) => c.phone.trim()).where((p) => p.isNotEmpty).toList();
+    if (numbers.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -147,7 +149,15 @@ class _SosHoldButtonState extends State<SosHoldButton>
     }
 
     final body = buildEmergencySmsBody(position);
-    await launchSms(phone, body);
+    // Always show the Alert Contacts sheet (also for a single contact) so the rider
+    // chooses SMS, WhatsApp or another app explicitly.
+    if (mounted) {
+      await AlertContactsBottomSheet.show(
+        context,
+        contacts: contacts,
+        messageBody: body,
+      );
+    }
   }
 
   @override

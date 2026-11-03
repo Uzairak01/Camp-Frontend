@@ -34,6 +34,8 @@ class FakeLocationService implements LocationService {
   @override
   Future<PositionData?> getCurrentPosition() async => position;
   @override
+  Future<PositionData?> getLastKnownPosition() async => position;
+  @override
   Stream<PositionData> getPositionStream({
     bool highAccuracy = false,
     bool enableForegroundNotification = false,

@@ -34,6 +34,7 @@ abstract final class CampRoutes {
   static const String emergencySos = '/emergency-sos';
   static const String emergencyQr = '/emergency-qr';
   static const String weatherDetail = '/weather-detail';
+  static const String trackingDiagnostics = '/settings/tracking-diagnostics';
 
   /// All non-legacy canonical routes (one per screen / entry point).
   static const List<String> canonicalRoutes = [
@@ -64,5 +65,6 @@ abstract final class CampRoutes {
     emergencySos,
     emergencyQr,
     weatherDetail,
+    trackingDiagnostics,
   ];
 }

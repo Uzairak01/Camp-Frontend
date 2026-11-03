@@ -156,10 +156,10 @@ void main() {
       );
       await tester.pump();
 
-      // Alert card shows most urgent item with real numbers: "Overdue by 1,400 km"
+      // Alert card shows most urgent item with real numbers: "1,400 km overdue"
       expect(find.text('Engine Oil & Filter'), findsOneWidget);
       expect(find.text('OVERDUE'), findsOneWidget);
-      expect(find.text('Overdue by 1,400 km'), findsOneWidget);
+      expect(find.textContaining('1,400 km overdue'), findsOneWidget);
       expect(find.text('Schedule Service'), findsOneWidget);
 
       // Tappable line "+2 more due"
@@ -264,7 +264,7 @@ void main() {
 
       // Home alert and Service status card must update without any navigation!
       expect(find.text('Engine Oil & Filter'), findsOneWidget);
-      expect(find.text('Overdue by 2,000 km'), findsOneWidget);
+      expect(find.textContaining('2,000 km overdue'), findsOneWidget);
       expect(find.text('Engine Oil & Filter overdue'), findsOneWidget);
     });
 
@@ -393,7 +393,7 @@ void main() {
 
       expect(find.text('Upcoming & Required\nMaintenance'), findsOneWidget);
       expect(find.text('Engine Oil & Filter'), findsOneWidget);
-      expect(find.text('Overdue by 1,000 km'), findsOneWidget);
+      expect(find.textContaining('1,000 km overdue'), findsOneWidget);
 
       // Mark done (runAsync lets the LocalStore write queue drain)
       await tester.runAsync(() async {
@@ -408,7 +408,7 @@ void main() {
 
       // Maintenance list updates immediately to "Nothing due right now" without navigation!
       expect(find.text('Nothing due right now'), findsOneWidget);
-      expect(find.text('Overdue by 1,000 km'), findsNothing);
+      expect(find.textContaining('1,000 km overdue'), findsNothing);
     });
   });
 
@@ -493,8 +493,8 @@ void main() {
       expect(find.text('OVERDUE'), findsOneWidget);
       expect(find.text('DUE SOON'), findsOneWidget);
 
-      expect(find.text('Overdue by 500 km'), findsOneWidget);
-      expect(find.text('Due in 500 km'), findsOneWidget);
+      expect(find.textContaining('500 km overdue'), findsOneWidget);
+      expect(find.textContaining('500 km left'), findsOneWidget);
 
       // Verify tapping opens ServiceScheduleScreen
       await tester.ensureVisible(find.text('Engine Oil & Filter'));

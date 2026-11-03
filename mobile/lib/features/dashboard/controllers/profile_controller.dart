@@ -3,6 +3,7 @@ import '../../../core/data/app_repositories.dart';
 import '../../../core/data/profile_repository.dart';
 import '../../../core/data/profile_repository_local.dart';
 import '../../auth/controllers/auth_controller.dart';
+import '../domain/emergency_contact_model.dart';
 import '../domain/user_profile_model.dart';
 
 /// Single source of truth for the rider's profile information.
@@ -30,13 +31,14 @@ class ProfileController extends ChangeNotifier {
   Set<String> _ridingStyles = {'Touring'};
   int _unitIndex = 0; // 0=Metric, 1=Imperial
 
-  // Emergency contact fields
-  String? _emergencyContactName;
-  String? _emergencyContactRelation;
-  String? _emergencyContactPhone;
+  // Emergency contacts (up to 5, first contact is primary)
+  List<EmergencyContact> _emergencyContacts = [];
   String _bloodGroup = '';
   String? _allergies;
   String? _medicalNotes;
+
+  // Last country code used by rider when adding/editing contacts
+  String? _lastUsedCountryCode;
 
   // ── Getters ────────────────────────────────────────────────────────────────
   String get fullName {
@@ -44,10 +46,7 @@ class ProfileController extends ChangeNotifier {
       return _fullName!.trim();
     }
     final authName = AuthController.instance.currentUser?.name.trim();
-    if (authName != null &&
-        authName.isNotEmpty &&
-        authName != 'Alex Henderson' &&
-        authName != 'Elena Vance') {
+    if (authName != null && authName.isNotEmpty) {
       return authName;
     }
     return '';
@@ -67,9 +66,7 @@ class ProfileController extends ChangeNotifier {
       return _email!.trim();
     }
     final authEmail = AuthController.instance.currentUser?.email;
-    if (authEmail != null &&
-        authEmail != 'moto.rider@example.com' &&
-        authEmail != 'rider@example.com') {
+    if (authEmail != null && authEmail.isNotEmpty) {
       return authEmail;
     }
     return '';
@@ -84,15 +81,34 @@ class ProfileController extends ChangeNotifier {
   Set<String> get ridingStyles => Set.unmodifiable(_ridingStyles);
   int get unitIndex => _unitIndex;
 
-  String get emergencyContactName => _emergencyContactName ?? '';
-  String get emergencyContactRelation => _emergencyContactRelation ?? '';
-  String get emergencyContactPhone => _emergencyContactPhone ?? '';
+  /// Unmodifiable view of all saved emergency contacts (up to 5).
+  List<EmergencyContact> get emergencyContacts => List.unmodifiable(_emergencyContacts);
+
+  /// Primary emergency contact (the first contact in the list, or null if none).
+  EmergencyContact? get primaryEmergencyContact =>
+      _emergencyContacts.isNotEmpty ? _emergencyContacts.first : null;
+
+  /// Backwards-compatible getter for primary emergency contact name.
+  String get emergencyContactName => primaryEmergencyContact?.name ?? '';
+
+  /// Backwards-compatible getter for primary emergency contact relationship.
+  String get emergencyContactRelation => primaryEmergencyContact?.relation ?? '';
+
+  /// Backwards-compatible getter for primary emergency contact phone number.
+  String get emergencyContactPhone => primaryEmergencyContact?.phone ?? '';
+
   String get bloodGroup => _bloodGroup;
   String get allergies => _allergies ?? '';
   String get medicalNotes => _medicalNotes ?? '';
 
+  /// Country calling code last used by the rider (digits only, e.g. '92', '966').
+  String? get lastUsedCountryCode => _lastUsedCountryCode;
+
   /// Update profile attributes and persist to [ProfileRepository].
-  void updateProfile({
+  ///
+  /// Awaits storage write before calling [notifyListeners] to ensure
+  /// all observing screens receive fully committed data.
+  Future<void> updateProfile({
     String? fullName,
     String? username,
     String? email,
@@ -104,13 +120,14 @@ class ProfileController extends ChangeNotifier {
     int? experienceIndex,
     Set<String>? ridingStyles,
     int? unitIndex,
+    List<EmergencyContact>? emergencyContacts,
     String? emergencyContactName,
     String? emergencyContactRelation,
     String? emergencyContactPhone,
     String? bloodGroup,
     String? allergies,
     String? medicalNotes,
-  }) {
+  }) async {
     if (fullName != null) _fullName = fullName;
     if (username != null) _username = username;
     if (email != null) _email = email;
@@ -122,22 +139,84 @@ class ProfileController extends ChangeNotifier {
     if (experienceIndex != null) _experienceIndex = experienceIndex;
     if (ridingStyles != null) _ridingStyles = Set.from(ridingStyles);
     if (unitIndex != null) _unitIndex = unitIndex;
-    if (emergencyContactName != null) _emergencyContactName = emergencyContactName;
-    if (emergencyContactRelation != null) _emergencyContactRelation = emergencyContactRelation;
-    if (emergencyContactPhone != null) _emergencyContactPhone = emergencyContactPhone;
+    if (emergencyContacts != null) {
+      _emergencyContacts = List.from(emergencyContacts);
+    } else if ((emergencyContactPhone != null && emergencyContactPhone.trim().isNotEmpty) ||
+        (emergencyContactName != null && emergencyContactName.trim().isNotEmpty)) {
+      _emergencyContacts = [
+        EmergencyContact(
+          id: 'ec_migrated_primary',
+          name: (emergencyContactName ?? '').trim(),
+          relation: (emergencyContactRelation ?? '').trim(),
+          phone: (emergencyContactPhone ?? '').trim(),
+        ),
+      ];
+    }
     if (bloodGroup != null) _bloodGroup = UserProfile.normalizeBloodType(bloodGroup);
     if (allergies != null) _allergies = allergies;
     if (medicalNotes != null) _medicalNotes = medicalNotes;
 
+    await save();
     notifyListeners();
-    save();
+  }
+
+  /// Adds a single emergency contact (up to 5 maximum).
+  Future<void> addEmergencyContact(EmergencyContact contact) async {
+    if (_emergencyContacts.length >= 5) return;
+    _emergencyContacts.add(contact);
+    await save();
+    notifyListeners();
+  }
+
+  /// Updates an existing emergency contact matching id.
+  Future<void> updateEmergencyContact(EmergencyContact contact) async {
+    final idx = _emergencyContacts.indexWhere((c) => c.id == contact.id);
+    if (idx != -1) {
+      _emergencyContacts[idx] = contact;
+      await save();
+      notifyListeners();
+    }
+  }
+
+  /// Removes an emergency contact matching id.
+  Future<void> removeEmergencyContact(String id) async {
+    _emergencyContacts.removeWhere((c) => c.id == id);
+    await save();
+    notifyListeners();
+  }
+
+  /// Reorders contact with [id] to index 0, designating it as the primary contact.
+  Future<void> setPrimaryEmergencyContact(String id) async {
+    final idx = _emergencyContacts.indexWhere((c) => c.id == id);
+    if (idx > 0) {
+      final contact = _emergencyContacts.removeAt(idx);
+      _emergencyContacts.insert(0, contact);
+      await save();
+      notifyListeners();
+    }
+  }
+
+  /// Replaces the list of emergency contacts (up to 5) and persists.
+  Future<void> setEmergencyContacts(List<EmergencyContact> contacts) async {
+    _emergencyContacts = contacts.take(5).toList();
+    await save();
+    notifyListeners();
+  }
+
+  /// Saves the last used country calling code through [ProfileRepository].
+  Future<void> saveLastUsedCountryCode(String code) async {
+    final clean = code.replaceAll(RegExp(r'[^0-9]'), '').trim();
+    if (clean.isNotEmpty) {
+      _lastUsedCountryCode = clean;
+      await _repository.saveLastUsedCountryCode(clean);
+    }
   }
 
   /// Update only the avatar file path and persist.
   void setAvatarPath(String path) {
     _avatarPath = path;
-    notifyListeners();
     save();
+    notifyListeners();
   }
 
   /// Await completion of all pending storage writes.
@@ -157,17 +236,16 @@ class ProfileController extends ChangeNotifier {
     _experienceIndex = 2;
     _ridingStyles = {'Touring'};
     _unitIndex = 0;
-    _emergencyContactName = null;
-    _emergencyContactRelation = null;
-    _emergencyContactPhone = null;
+    _emergencyContacts = [];
     _bloodGroup = '';
     _allergies = null;
     _medicalNotes = null;
+    _lastUsedCountryCode = null;
     _repository = AppRepositories.instance.profileRepository;
     notifyListeners();
   }
 
-  /// Load profile from repository.
+  /// Load profile and last used country code from repository.
   Future<void> load([dynamic source]) async {
     final repo = resolveProfileRepository(source, _repository);
     if (source != null) {
@@ -187,14 +265,13 @@ class ProfileController extends ChangeNotifier {
         _experienceIndex = profile.experienceIndex;
         _ridingStyles = profile.ridingStyles;
         _unitIndex = profile.unitIndex;
-        _emergencyContactName = profile.emergencyContactName;
-        _emergencyContactRelation = profile.emergencyContactRelation;
-        _emergencyContactPhone = profile.emergencyContactPhone;
+        _emergencyContacts = List.from(profile.emergencyContacts);
         _bloodGroup = profile.bloodGroup;
         _allergies = profile.allergies;
         _medicalNotes = profile.medicalNotes;
         notifyListeners();
       }
+      _lastUsedCountryCode = await repo.loadLastUsedCountryCode();
     } catch (_) {
       // Gracefully fall back to defaults
     }
@@ -215,9 +292,7 @@ class ProfileController extends ChangeNotifier {
       experienceIndex: _experienceIndex,
       ridingStyles: _ridingStyles,
       unitIndex: _unitIndex,
-      emergencyContactName: _emergencyContactName,
-      emergencyContactRelation: _emergencyContactRelation,
-      emergencyContactPhone: _emergencyContactPhone,
+      emergencyContacts: _emergencyContacts,
       bloodGroup: _bloodGroup,
       allergies: _allergies,
       medicalNotes: _medicalNotes,

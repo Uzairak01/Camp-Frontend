@@ -15,6 +15,7 @@ import '../../../../app/theme/app_theme.dart';
 import '../../../../core/widgets/camp_app_bar.dart';
 import '../../../bike_scan/presentation/screens/bike_details_screen.dart';
 import '../../../dashboard/controllers/profile_controller.dart';
+import '../../../dashboard/domain/emergency_phone_helper.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
 import '../../../garage/domain/bike_model.dart';
 import '../../../settings/controllers/settings_controller.dart';
@@ -214,6 +215,7 @@ class _EmergencyQrScreenState extends State<EmergencyQrScreen> {
           bloodGroup: bloodType,
           allergies: allergies,
           medicalNotes: medicalNotes,
+          emergencyContacts: profile.emergencyContacts,
           emergencyContactName: contactName,
           emergencyContactPhone: contactPhone,
           emergencyContactRelation: contactRelation,
@@ -471,8 +473,11 @@ class _EmergencyQrScreenState extends State<EmergencyQrScreen> {
                         key: const Key('toggle_emergency_contact_row'),
                         switchKey: const Key('switch_emergency_contact'),
                         title: 'Emergency contact',
-                        subtitle:
-                            contactName.isNotEmpty ? contactName : 'Not set',
+                        subtitle: profile.emergencyContacts.isNotEmpty
+                            ? (profile.emergencyContacts.length == 1
+                                ? profile.emergencyContacts.first.name
+                                : '${profile.emergencyContacts.first.name} (+${profile.emergencyContacts.length - 1} more)')
+                            : 'Not set',
                         value: _includeEmergencyContact,
                         icon: Icons.contact_phone_outlined,
                         onChanged: (val) =>
@@ -650,7 +655,7 @@ class _EmergencyQrScreenState extends State<EmergencyQrScreen> {
                               _buildInfoRow(
                                 label: 'Contact phone',
                                 value: contactPhone.isNotEmpty
-                                    ? contactPhone
+                                    ? EmergencyPhoneHelper.formatPhoneReadable(contactPhone)
                                     : 'Not set',
                               ),
                             ],

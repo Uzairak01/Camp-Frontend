@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
+import '../../../dashboard/presentation/widgets/ride_summary_sheet.dart';
+import '../../../garage/services/fuel_tracker_service.dart';
 import '../../../settings/controllers/settings_controller.dart';
 import '../../controllers/navigation_controller.dart';
 
 /// Modal sheet shown when the user arrives within ~30m of their destination.
+///
+/// Offers "Finish ride" (primary action running the unified ride finish flow)
+/// and "Keep tracking" (dismisses arrival sheet while keeping the ride tracker active).
 class NavArrivedSheet extends StatelessWidget {
   const NavArrivedSheet({
     required this.controller,
@@ -14,6 +20,29 @@ class NavArrivedSheet extends StatelessWidget {
 
   final NavigationController controller;
   final VoidCallback onDone;
+
+  /// Completes the active tracked ride using the same finish flow as the exit sheet,
+  /// dismisses the arrival state, and presents the ride summary or short-ride notice.
+  Future<void> _handleFinishRide(BuildContext context) async {
+    final report = await FuelTrackerService.instance.finishRide();
+    onDone();
+    if (context.mounted) {
+      if (report != null) {
+        RideSummarySheet.show(context, report);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Ride too short to record',
+              style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+            ),
+            backgroundColor: AppColors.darkCharcoal,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -138,11 +167,12 @@ class NavArrivedSheet extends StatelessWidget {
 
           const SizedBox(height: 20),
 
-          // Done Action
+          // Primary "Finish ride" Action
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: onDone,
+              key: const ValueKey('arrived_finish_ride_button'),
+              onPressed: () => _handleFinishRide(context),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.tacticalOrange,
                 foregroundColor: Colors.white,
@@ -152,10 +182,35 @@ class NavArrivedSheet extends StatelessWidget {
                 ),
               ),
               child: const Text(
-                'Complete Ride',
+                'Finish ride',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Secondary "Keep tracking" Action
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              key: const ValueKey('arrived_keep_tracking_button'),
+              onPressed: onDone,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.darkCharcoal,
+                side: const BorderSide(color: AppColors.mutedLight),
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+              child: const Text(
+                'Keep tracking',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),

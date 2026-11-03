@@ -50,57 +50,9 @@ class MaintenanceListWidget extends StatelessWidget {
 
   // ── Formatters ─────────────────────────────────────────────────────────
 
-  static String _formatNumber(int n) {
-    final str = n.toString();
-    final buffer = StringBuffer();
-    int count = 0;
-    for (int i = str.length - 1; i >= 0; i--) {
-      buffer.write(str[i]);
-      count++;
-      if (count % 3 == 0 && i > 0) buffer.write(',');
-    }
-    return buffer.toString().split('').reversed.join('');
-  }
-
-  /// Formats the remaining/overdue description.
-  /// When an item is overdue by BOTH km and days both are shown, e.g.
-  /// "Overdue by 38,855 km, 236 days".
+  /// Formats the remaining/overdue description using the shared formatter.
   static String _formatRemaining(ServiceSchedulePrediction item) {
-    final isOverdue = item.scheduleStatus == ScheduleItemStatus.overdue;
-
-    if (isOverdue) {
-      final kmOverdue = item.remainingKm != null && item.remainingKm! <= 0;
-      final daysOverdue = item.remainingDays != null && item.remainingDays! <= 0;
-
-      if (kmOverdue && daysOverdue) {
-        final overKm = item.remainingKm!.abs();
-        final overDays = item.remainingDays!.abs();
-        final kmPart = overKm == 0 ? null : '${_formatNumber(overKm)} km';
-        final daysPart = overDays == 0 ? null : '$overDays ${overDays == 1 ? 'day' : 'days'}';
-        final parts = [kmPart, daysPart].whereType<String>().toList();
-        if (parts.isEmpty) return 'Overdue';
-        return 'Overdue by ${parts.join(', ')}';
-      }
-
-      if (kmOverdue) {
-        final overKm = item.remainingKm!.abs();
-        return overKm == 0 ? 'Overdue' : 'Overdue by ${_formatNumber(overKm)} km';
-      }
-
-      if (daysOverdue) {
-        final overDays = item.remainingDays!.abs();
-        return overDays == 0 ? 'Overdue today' : 'Overdue by $overDays ${overDays == 1 ? 'day' : 'days'}';
-      }
-
-      return 'Overdue';
-    } else {
-      if (item.remainingKm != null) {
-        return 'Due in ${_formatNumber(item.remainingKm!)} km';
-      } else if (item.remainingDays != null) {
-        return 'Due in ${item.remainingDays} ${item.remainingDays == 1 ? 'day' : 'days'}';
-      }
-      return 'Due soon';
-    }
+    return item.friendlyStatus.headline;
   }
 
   @override
@@ -284,6 +236,21 @@ class MaintenanceListWidget extends StatelessWidget {
                               color: isOverdue ? AppColors.alertRed : AppColors.mutedText,
                             ),
                           ),
+                          if (item.friendlyStatus.actionLabel != null) ...[
+                            const SizedBox(height: 6),
+                            InkWell(
+                              onTap: () => onScheduleItemTapped?.call(item),
+                              child: Text(
+                                item.friendlyStatus.actionLabel!,
+                                style: GoogleFonts.manrope(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.alertRed,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

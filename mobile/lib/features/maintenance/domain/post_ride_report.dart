@@ -13,9 +13,13 @@ class PostRideReport {
     this.durationHours,
     this.notes,
     this.flaggedIssues,
+    String? routeTitle,
+    this.source = 'manual',
+    this.startedAt,
+    this.endedAt,
     this.createdAt,
     this.updatedAt,
-  });
+  }) : explicitRouteTitle = routeTitle;
 
   factory PostRideReport.fromJson(Map<String, dynamic> json) {
     DateTime? parseUtc(dynamic val) {
@@ -53,6 +57,10 @@ class PostRideReport {
           const [],
       notes: json['notes'] as String?,
       flaggedIssues: json['flaggedIssues'] as String?,
+      routeTitle: json['routeTitle'] as String?,
+      source: json['source'] as String? ?? 'manual',
+      startedAt: parseUtc(json['startedAt']),
+      endedAt: parseUtc(json['endedAt']),
     );
   }
 
@@ -91,6 +99,24 @@ class PostRideReport {
   /// Optional specific mechanical symptoms or issues flagged during ride.
   final String? flaggedIssues;
 
+  /// Explicit custom or destination route title.
+  final String? explicitRouteTitle;
+
+  /// Source provenance: 'tracked' (from FuelTrackerService) or 'manual' (from debrief).
+  final String source;
+
+  /// Wall-clock timestamp when tracking started (optional).
+  final DateTime? startedAt;
+
+  /// Wall-clock timestamp when tracking finished (optional).
+  final DateTime? endedAt;
+
+  /// Whether this report originated from live GPS ride tracking.
+  bool get isTracked => source == 'tracked';
+
+  /// Whether this report was manually logged by the rider.
+  bool get isManual => source != 'tracked';
+
   /// Convenience getter for combined notes or flagged issues.
   String? get combinedNotes {
     if (notes != null && notes!.isNotEmpty && flaggedIssues != null && flaggedIssues!.isNotEmpty) {
@@ -108,8 +134,11 @@ class PostRideReport {
   /// Primary terrain tag or 'Mixed'.
   String get terrain => terrainTags.isNotEmpty ? terrainTags.first : 'Mixed';
 
-  /// Primary route title or notes snippet or fallback.
+  /// Primary route title: uses explicit route title if set, or notes snippet, or date fallback.
   String get routeTitle {
+    if (explicitRouteTitle != null && explicitRouteTitle!.trim().isNotEmpty) {
+      return explicitRouteTitle!.trim();
+    }
     if (notes != null && notes!.trim().isNotEmpty) {
       final firstLine = notes!.trim().split('\n').first;
       return firstLine.length > 40 ? '${firstLine.substring(0, 40)}...' : firstLine;
@@ -129,6 +158,10 @@ class PostRideReport {
     List<String>? terrainTags,
     String? notes,
     String? flaggedIssues,
+    String? routeTitle,
+    String? source,
+    DateTime? startedAt,
+    DateTime? endedAt,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -141,6 +174,10 @@ class PostRideReport {
       terrainTags: terrainTags ?? this.terrainTags,
       notes: notes ?? this.notes,
       flaggedIssues: flaggedIssues ?? this.flaggedIssues,
+      routeTitle: routeTitle ?? explicitRouteTitle,
+      source: source ?? this.source,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? DateTime.now().toUtc(),
     );
@@ -158,7 +195,11 @@ class PostRideReport {
           durationHours == other.durationHours &&
           listEquals(terrainTags, other.terrainTags) &&
           notes == other.notes &&
-          flaggedIssues == other.flaggedIssues;
+          flaggedIssues == other.flaggedIssues &&
+          explicitRouteTitle == other.explicitRouteTitle &&
+          source == other.source &&
+          startedAt == other.startedAt &&
+          endedAt == other.endedAt;
 
   @override
   int get hashCode => Object.hash(
@@ -170,11 +211,15 @@ class PostRideReport {
         Object.hashAll(terrainTags),
         notes,
         flaggedIssues,
+        explicitRouteTitle,
+        source,
+        startedAt,
+        endedAt,
       );
 
   @override
   String toString() =>
-      'PostRideReport(id: $id, bike: $bikeId, dist: ${distanceKm}km, duration: ${durationHours}h, terrain: $terrainTags)';
+      'PostRideReport(id: $id, bike: $bikeId, title: $routeTitle, dist: ${distanceKm}km, duration: ${durationHours}h, source: $source, terrain: $terrainTags)';
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -187,5 +232,9 @@ class PostRideReport {
         'terrainTags': terrainTags,
         'notes': notes,
         'flaggedIssues': flaggedIssues,
+        'routeTitle': explicitRouteTitle,
+        'source': source,
+        'startedAt': startedAt?.toUtc().toIso8601String(),
+        'endedAt': endedAt?.toUtc().toIso8601String(),
       };
 }

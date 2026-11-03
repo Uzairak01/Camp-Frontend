@@ -205,15 +205,11 @@ class MaintenancePredictionEngine {
 
     final String reason;
     if (sp.scheduleStatus == ScheduleItemStatus.notSetUp) {
-      reason = 'Service schedule not set up. Configure your interval in Service Schedule.';
+      reason = 'Service schedule not set up. Add when you last did this to get reminders.';
     } else if (sp.scheduleStatus == ScheduleItemStatus.addLastDone) {
-      reason = 'Interval configured. Add last done reading to start tracking wear.';
-    } else if (sp.scheduleStatus == ScheduleItemStatus.overdue) {
-      reason = 'Service threshold reached. Service is overdue.';
-    } else if (sp.scheduleStatus == ScheduleItemStatus.dueSoon) {
-      reason = 'Service threshold approaching (${sp.displaySubtitle}).';
+      reason = 'Interval configured. Add last done reading to start tracking wear. Add when you last did this to get reminders.';
     } else {
-      reason = 'Within safe schedule limits (${sp.displaySubtitle}).';
+      reason = sp.friendlyStatus.headline;
     }
 
     final guideData = _guideForType(sp.type);
@@ -309,6 +305,25 @@ class MaintenancePredictionEngine {
             'If pads are near minimum thickness, unbolt caliper retaining pins and replace.',
             'Clean caliper pistons before retracting to avoid seal damage.',
             'Pump brake lever until firm hydraulic pressure is restored.',
+          ],
+        );
+      case ServiceItemType.rearBrakes:
+        return (
+          'Rear Brake Inspection & Adjustment',
+          const [
+            'Inspect rear brake shoe wear indicator or pad thickness.',
+            'Check rear brake pedal height and free play.',
+            'Inspect brake rod, return spring, and stop switch linkage.',
+            'Clean brake drum/disc and verify smooth stopping action.',
+          ],
+        );
+      case ServiceItemType.custom:
+        return (
+          'Custom Maintenance Inspection',
+          const [
+            'Inspect component for wear, damage, or loose mounting hardware.',
+            'Follow manufacturer recommendations for inspection or replacement.',
+            'Record notes and odometer reading.',
           ],
         );
       case ServiceItemType.tyres:

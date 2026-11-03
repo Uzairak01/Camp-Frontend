@@ -12,6 +12,7 @@ import '../../../garage/presentation/widgets/update_fuel_sheet.dart';
 import '../../../garage/services/fuel_tracker_service.dart';
 import '../../../maintenance/controllers/maintenance_controller.dart';
 import '../../../maintenance/domain/maintenance_prediction_engine.dart';
+import 'ride_summary_sheet.dart';
 
 /// Active Motorcycle Overview — skeuomorphic raised card bound to [ActiveBikeController] and [FuelTrackerService].
 class ActiveBikeCardWidget extends StatefulWidget {
@@ -125,7 +126,8 @@ class _ActiveBikeCardWidgetState extends State<ActiveBikeCardWidget>
           );
         }
 
-        final liters = bike.fuelRemainingLiters;
+        final liters =
+            FuelEstimator.currentLiters(bike) ?? bike.fuelRemainingLiters;
         final tankCap = bike.fuelTankCapacityLiters;
         final fuelAvg = bike.fuelAverageKmPerLiter;
         final rangeKm = FuelEstimator.rangeKm(liters, fuelAvg);
@@ -341,7 +343,31 @@ class _ActiveBikeCardWidgetState extends State<ActiveBikeCardWidget>
                           color: Colors.white,
                         ),
                       ),
-                      onPressed: () => fuelTracker.toggleRide(),
+                      onPressed: () async {
+                        if (fuelTracker.isRiding) {
+                          final report = await fuelTracker.finishRide();
+                          if (context.mounted) {
+                            if (report != null) {
+                              RideSummarySheet.show(context, report);
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Ride too short to record',
+                                    style: GoogleFonts.manrope(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  backgroundColor: AppColors.darkCharcoal,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          }
+                        } else {
+                          await fuelTracker.startRide();
+                        }
+                      },
                     ),
                   ],
                 ),

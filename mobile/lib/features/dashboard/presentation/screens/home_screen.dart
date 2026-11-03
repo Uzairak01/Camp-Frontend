@@ -3,8 +3,10 @@ import 'package:flutter/services.dart';
 
 import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
+import '../../../../core/data/app_repositories.dart';
 import '../../../../core/widgets/camp_bottom_nav.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../garage/services/fuel_tracker_service.dart';
 import '../../../maintenance/controllers/maintenance_controller.dart';
 import '../../../settings/controllers/settings_controller.dart';
 import '../widgets/active_bike_card_widget.dart';
@@ -15,6 +17,7 @@ import '../widgets/group_beacon_card_widget.dart';
 import '../widgets/home_weather_card_widget.dart';
 import '../widgets/maintenance_alert_card_widget.dart';
 import '../widgets/recent_updates_feed_widget.dart';
+import '../widgets/unfinished_ride_recovery_sheet.dart';
 import '../widgets/voice_copilot_bar_widget.dart';
 
 /// CAMP Explore Home / Dashboard Screen
@@ -27,6 +30,29 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkUnfinishedRide();
+    });
+  }
+
+  /// Checks for an unfinished ride persisted from a prior session (crash/kill recovery).
+  /// Returns early if a ride is currently active in memory so returning to Home mid-ride
+  /// does not falsely show the recovery sheet.
+  Future<void> _checkUnfinishedRide() async {
+    if (FuelTrackerService.instance.isRiding) return;
+    final savedRide = await AppRepositories
+        .instance.inProgressRideRepository
+        .loadInProgressRide();
+    if (savedRide != null &&
+        mounted &&
+        !FuelTrackerService.instance.isRiding) {
+      await UnfinishedRideRecoverySheet.show(context, savedRide);
+    }
+  }
 
   void _showNotification(String message) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();

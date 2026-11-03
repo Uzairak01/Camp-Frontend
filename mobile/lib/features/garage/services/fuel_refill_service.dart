@@ -70,6 +70,7 @@ class FuelRefillService {
       final isFull = isFullTank || (newRemaining >= tankCapacity - 0.2);
       final updatedBike = targetBike.copyWith(
         fuelRemainingLiters: double.parse(newRemaining.toStringAsFixed(1)),
+        fuelLevelOdometerKm: currentOdo,
         fuelAverageKmPerLiter: fuelAverageKmPerLiter ?? targetBike.fuelAverageKmPerLiter,
         lastFullRefillOdometer:
             isFull ? currentOdo : targetBike.lastFullRefillOdometer,
@@ -144,9 +145,11 @@ class FuelRefillService {
             targetBike.fuelTankCapacityLiters! > 0)
         ? targetBike.fuelTankCapacityLiters!
         : 20.0;
+    final currentOdo = targetBike.preciseOdometerKm ?? targetBike.odometerKm.toDouble();
     final clamped = litres.clamp(0.0, tankCapacity);
     final updated = targetBike.copyWith(
       fuelRemainingLiters: double.parse(clamped.toStringAsFixed(1)),
+      fuelLevelOdometerKm: currentOdo,
       lastFuelUpdate: DateTime.now(),
     );
     bikeController.updateBike(updated);

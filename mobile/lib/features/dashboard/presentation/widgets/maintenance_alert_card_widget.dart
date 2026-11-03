@@ -34,20 +34,6 @@ class MaintenanceAlertCardWidget extends StatelessWidget {
     CampBottomNav.navigateToTab(context, CampTab.finances);
   }
 
-  String _formatNumber(int n) {
-    final str = n.toString();
-    final buffer = StringBuffer();
-    int count = 0;
-    for (int i = str.length - 1; i >= 0; i--) {
-      buffer.write(str[i]);
-      count++;
-      if (count % 3 == 0 && i > 0) {
-        buffer.write(',');
-      }
-    }
-    return buffer.toString().split('').reversed.join('');
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -166,42 +152,7 @@ class MaintenanceAlertCardWidget extends StatelessWidget {
                 AppColors.tacticalOrangeDark,
               ];
 
-        final String descriptionText;
-        if (isOverdue) {
-          final kmOverdue =
-              urgentItem.remainingKm != null && urgentItem.remainingKm! <= 0;
-          final daysOverdue =
-              urgentItem.remainingDays != null && urgentItem.remainingDays! <= 0;
-          if (kmOverdue && daysOverdue) {
-            final overKm = urgentItem.remainingKm!.abs();
-            final overDays = urgentItem.remainingDays!.abs();
-            final parts = [
-              if (overKm > 0) '${_formatNumber(overKm)} km',
-              if (overDays > 0) '$overDays ${overDays == 1 ? 'day' : 'days'}',
-            ];
-            descriptionText =
-                parts.isEmpty ? 'Overdue' : 'Overdue by ${parts.join(', ')}';
-          } else if (kmOverdue) {
-            final overKm = urgentItem.remainingKm!.abs();
-            descriptionText =
-                overKm == 0 ? 'Overdue' : 'Overdue by ${_formatNumber(overKm)} km';
-          } else if (daysOverdue) {
-            final overDays = urgentItem.remainingDays!.abs();
-            descriptionText = overDays == 0
-                ? 'Overdue today'
-                : 'Overdue by $overDays ${overDays == 1 ? 'day' : 'days'}';
-          } else {
-            descriptionText = 'Overdue';
-          }
-        } else {
-          if (urgentItem.remainingKm != null) {
-            descriptionText = 'Due in ${_formatNumber(urgentItem.remainingKm!)} km';
-          } else if (urgentItem.remainingDays != null) {
-            descriptionText = 'Due in ${urgentItem.remainingDays} ${urgentItem.remainingDays == 1 ? 'day' : 'days'}';
-          } else {
-            descriptionText = 'Due soon';
-          }
-        }
+        final String descriptionText = urgentItem.friendlyStatus.headline;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -290,7 +241,9 @@ class MaintenanceAlertCardWidget extends StatelessWidget {
                                 Row(
                                   children: [
                                     PrimaryButton(
-                                      label: 'Schedule Service',
+                                      label: urgentItem.friendlyStatus.isVeryOverdue
+                                          ? 'Edit last service'
+                                          : 'Schedule Service',
                                       onTap: onScheduleService ??
                                           () {
                                             Navigator.of(context).push(

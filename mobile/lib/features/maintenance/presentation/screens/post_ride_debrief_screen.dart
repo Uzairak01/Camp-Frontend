@@ -17,9 +17,10 @@ import '../../domain/post_ride_report.dart';
 /// Never prefilled with estimates or default values. Saves directly to
 /// [PostRideReportController] / repository.
 class PostRideDebriefScreen extends StatefulWidget {
-  const PostRideDebriefScreen({super.key, this.bikeId});
+  const PostRideDebriefScreen({super.key, this.bikeId, this.initialReport});
 
   final String? bikeId;
+  final PostRideReport? initialReport;
 
   @override
   State<PostRideDebriefScreen> createState() => _PostRideDebriefScreenState();
@@ -36,7 +37,27 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedDate = DateTime.now();
+    if (widget.initialReport != null) {
+      final rep = widget.initialReport!;
+      _selectedDate = rep.date;
+      _distanceController.text = rep.distanceKm > 0
+          ? (rep.distanceKm == rep.distanceKm.roundToDouble()
+              ? rep.distanceKm.toStringAsFixed(0)
+              : rep.distanceKm.toStringAsFixed(1))
+          : '';
+      if (rep.durationHours != null && rep.durationHours! > 0) {
+        _durationController.text =
+            rep.durationHours == rep.durationHours!.roundToDouble()
+                ? rep.durationHours!.toStringAsFixed(0)
+                : rep.durationHours!.toStringAsFixed(1);
+      }
+      _selectedTerrainTags.addAll(rep.terrainTags);
+      if (rep.notes != null) {
+        _notesController.text = rep.notes!;
+      }
+    } else {
+      _selectedDate = DateTime.now();
+    }
   }
 
   @override
@@ -75,6 +96,29 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
     }
   }
 
+  String _odometerImpactNote() {
+    if (widget.initialReport?.source == 'tracked') {
+      return 'Distance already added to odometer live';
+    }
+    final distanceText = _distanceController.text.trim();
+    final entered = double.tryParse(distanceText) ?? 0.0;
+    if (widget.initialReport != null) {
+      final diff = entered - widget.initialReport!.distanceKm;
+      if (diff == 0) {
+        return 'Odometer already includes this ride';
+      }
+      final diffStr =
+          diff > 0 ? '+${diff.toStringAsFixed(0)}' : diff.toStringAsFixed(0);
+      return 'Will adjust odometer by $diffStr km';
+    }
+    final kmStr = entered > 0
+        ? (entered == entered.roundToDouble()
+            ? entered.toStringAsFixed(0)
+            : entered.toStringAsFixed(1))
+        : 'X';
+    return 'Will add $kmStr km to odometer';
+  }
+
   void _save() {
     final distanceText = _distanceController.text.trim();
     final distance = double.tryParse(distanceText);
@@ -94,30 +138,65 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
 
     final notesText = _notesController.text.trim();
 
-    final targetBikeId = widget.bikeId ??
+    final targetBikeId = widget.initialReport?.bikeId ??
+        widget.bikeId ??
         ActiveBikeController.instance.activeBike?.id ??
         'unknown-bike';
 
-    final report = PostRideReport(
-      id: 'rep-${DateTime.now().millisecondsSinceEpoch}',
-      bikeId: targetBikeId,
-      date: _selectedDate,
-      distanceKm: distance,
-      durationHours: duration,
-      terrainTags: _selectedTerrainTags.toList(),
-      notes: notesText.isNotEmpty ? notesText : null,
-    );
-
-    PostRideReportController.instance.addReport(report);
-
-    // Advance odometer on active bike if matching
-    final bike = ActiveBikeController.instance.getBikeById(targetBikeId);
-    if (bike != null) {
-      final updated = bike.copyWith(
-        odometerKm: bike.odometerKm + distance.round(),
-        lastUpdated: DateTime.now(),
+    if (widget.initialReport != null) {
+      // Update existing report in-place, preserving source and original creation timestamps
+      final updated = widget.initialReport!.copyWith(
+        date: _selectedDate,
+        distanceKm: distance,
+        durationHours: duration,
+        terrainTags: _selectedTerrainTags.toList(),
+        notes: notesText.isNotEmpty ? notesText : null,
+        updatedAt: DateTime.now().toUtc(),
       );
-      ActiveBikeController.instance.updateBike(updated);
+      PostRideReportController.instance.updateReport(updated);
+
+      // Only adjust odometer if this was a manual report! Tracked reports never touch odometer.
+      if (widget.initialReport!.source != 'tracked') {
+        final diff = distance - widget.initialReport!.distanceKm;
+        if (diff != 0) {
+          final bike = ActiveBikeController.instance.getBikeById(targetBikeId);
+          if (bike != null) {
+            final newOdo = bike.odometerKm + diff.round();
+            final updatedBike = bike.copyWith(
+              odometerKm: newOdo,
+              preciseOdometerKm: newOdo.toDouble(),
+              lastUpdated: DateTime.now(),
+            );
+            ActiveBikeController.instance.updateBike(updatedBike);
+          }
+        }
+      }
+    } else {
+      // Create new manual report
+      final report = PostRideReport(
+        id: 'rep-${DateTime.now().millisecondsSinceEpoch}',
+        bikeId: targetBikeId,
+        date: _selectedDate,
+        distanceKm: distance,
+        durationHours: duration,
+        terrainTags: _selectedTerrainTags.toList(),
+        notes: notesText.isNotEmpty ? notesText : null,
+        source: 'manual',
+        createdAt: DateTime.now().toUtc(),
+        updatedAt: DateTime.now().toUtc(),
+      );
+      PostRideReportController.instance.addReport(report);
+
+      final bike = ActiveBikeController.instance.getBikeById(targetBikeId);
+      if (bike != null) {
+        final newOdo = bike.odometerKm + distance.round();
+        final updatedBike = bike.copyWith(
+          odometerKm: newOdo,
+          preciseOdometerKm: newOdo.toDouble(),
+          lastUpdated: DateTime.now(),
+        );
+        ActiveBikeController.instance.updateBike(updatedBike);
+      }
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -266,10 +345,21 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
                                 ),
                               ),
                               onChanged: (_) {
-                                if (_errorMessage != null) {
-                                  setState(() => _errorMessage = null);
-                                }
+                                setState(() {
+                                  _errorMessage = null;
+                                });
                               },
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _odometerImpactNote(),
+                            style: GoogleFonts.manrope(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: widget.initialReport?.source == 'tracked'
+                                  ? AppColors.statusGreen
+                                  : AppColors.mutedText,
                             ),
                           ),
                           const SizedBox(height: 16),

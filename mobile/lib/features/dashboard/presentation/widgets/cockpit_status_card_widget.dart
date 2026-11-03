@@ -1,25 +1,25 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
 
 import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/widgets/widgets.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
 import '../../../maintenance/controllers/maintenance_controller.dart';
+import '../../../navigation/controllers/current_place_controller.dart';
 import '../../controllers/profile_controller.dart';
 import '../../domain/weather_service.dart';
 
 /// Dark Rider Banner wrapped in a soft tactile bezel ring — Cockpit Hero Card.
-/// Single source of truth: reads from [ProfileController] and [ActiveBikeController].
-/// Displays live clock (minute timer), area location via geolocator/Nominatim (zoom=14),
+/// Single source of truth: reads from [ProfileController], [ActiveBikeController],
+/// and [CurrentPlaceController].
+/// Displays live clock (minute timer), shared location label from [CurrentPlaceController],
 /// and weather data from [WeatherProvider].
 class CockpitStatusCardWidget extends StatefulWidget {
+  /// Creates a [CockpitStatusCardWidget] hero card.
   const CockpitStatusCardWidget({
     super.key,
     this.avatarUrl,
@@ -27,8 +27,13 @@ class CockpitStatusCardWidget extends StatefulWidget {
     this.onProfilePressed,
   });
 
+  /// Remote image URL for the rider's avatar.
   final String? avatarUrl;
+
+  /// Callback when the primary Cockpit CTA is pressed.
   final VoidCallback? onCtaPressed;
+
+  /// Callback when the rider avatar is tapped to open profile.
   final VoidCallback? onProfilePressed;
 
   @override
@@ -38,7 +43,6 @@ class CockpitStatusCardWidget extends StatefulWidget {
 class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
   Timer? _minuteTimer;
   String _timeString = '';
-  String _locationLabel = 'Locating...';
   WeatherData? _weatherData;
 
   @override
@@ -48,7 +52,7 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
     _minuteTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _updateTime();
     });
-    _fetchLocationAndWeather();
+    _fetchWeather();
   }
 
   @override
@@ -74,93 +78,21 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
     }
   }
 
-  Future<void> _fetchLocationAndWeather() async {
+  /// Fetches weather for the rider's current or last known position.
+  /// Does not perform its own geocoding; location naming is owned by [CurrentPlaceController].
+  Future<void> _fetchWeather() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (mounted) setState(() => _locationLabel = 'Location off');
-        return;
-      }
+      final pos = CurrentPlaceController.instance.lastKnownPosition;
+      final lat = pos?.latitude ?? 33.6844;
+      final lon = pos?.longitude ?? 73.0479;
 
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied ||
-            permission == LocationPermission.deniedForever) {
-          if (mounted) setState(() => _locationLabel = 'Location off');
-          return;
-        }
-      }
+      // Sync the shared location label to WeatherProvider
+      WeatherProvider.currentLocationLabel =
+          CurrentPlaceController.instance.displayLabel;
 
-      Position? position;
-      try {
-        position = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 5),
-          ),
-        );
-      } catch (_) {
-        position = await Geolocator.getLastKnownPosition();
-      }
-
-      if (position == null) {
-        if (mounted) setState(() => _locationLabel = 'Location off');
-        return;
-      }
-
-      // Nominatim reverse geocode with zoom=14 and accept-language=en (never POI-level)
-      final uri = Uri.parse(
-        'https://nominatim.openstreetmap.org/reverse?lat=${position.latitude}&lon=${position.longitude}&format=json&zoom=14&addressdetails=1&accept-language=en',
-      );
-
-      final response = await http.get(
-        uri,
-        headers: {
-          'User-Agent': 'CAMP-App/1.0 (contact: support@camp-moto.app)',
-          'Accept-Language': 'en',
-        },
-      ).timeout(const Duration(seconds: 6));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body) as Map<String, dynamic>;
-        final address = data['address'] as Map<String, dynamic>?;
-        String? shortArea;
-        if (address != null) {
-          shortArea = (address['suburb'] ??
-                  address['city_district'] ??
-                  address['city'] ??
-                  address['town'] ??
-                  address['village'] ??
-                  address['county'] ??
-                  address['state'])
-              ?.toString();
-        }
-        if (shortArea == null || shortArea.trim().isEmpty) {
-          final displayName = (data['display_name'] as String?) ?? '';
-          final parts = displayName.split(',');
-          shortArea = parts.isNotEmpty ? parts.first.trim() : 'Location off';
-        }
-
-        if (mounted) {
-          setState(() {
-            _locationLabel = shortArea!.trim();
-            WeatherProvider.currentLocationLabel = _locationLabel;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            _locationLabel = 'Location off';
-            WeatherProvider.currentLocationLabel = _locationLabel;
-          });
-        }
-      }
-
-      // Weather data from WeatherProvider
       final weather = await WeatherProvider.service.getWeather(
-        latitude: position.latitude,
-        longitude: position.longitude,
+        latitude: lat,
+        longitude: lon,
       );
       if (mounted) {
         setState(() {
@@ -168,12 +100,7 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
         });
       }
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _locationLabel = 'Location off';
-          WeatherProvider.currentLocationLabel = _locationLabel;
-        });
-      }
+      // Gracefully retain weather unavailable state
     }
   }
 
@@ -184,12 +111,18 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
         ProfileController.instance,
         ActiveBikeController.instance,
         MaintenanceController.instance,
+        CurrentPlaceController.instance,
       ]),
       builder: (context, _) {
         final profile = ProfileController.instance;
         final riderName = profile.fullName;
         final riderFirstName = profile.firstName;
         final activeBike = ActiveBikeController.instance.activeBike;
+        final currentPlace = CurrentPlaceController.instance;
+        final locationLabel = currentPlace.displayLabel;
+
+        // Keep WeatherProvider synchronized with the shared place label
+        WeatherProvider.currentLocationLabel = locationLabel;
 
         Widget avatarWidget;
         if (profile.avatarPath != null && profile.avatarPath!.isNotEmpty) {
@@ -346,7 +279,14 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
                   runSpacing: 8,
                   children: [
                     _darkPill(Icons.access_time_rounded, _timeString),
-                    _darkPill(Icons.location_on_rounded, _locationLabel),
+                    _darkPill(
+                      Icons.location_on_rounded,
+                      locationLabel,
+                      onTap: currentPlace.isLocationOff
+                          ? () => currentPlace.showLocationOffHint(context)
+                          : () => Navigator.of(context)
+                              .pushNamed(CampRoutes.navigationMap),
+                    ),
                     _darkPill(
                       Icons.wb_sunny_rounded,
                       weatherText,
@@ -366,75 +306,75 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
 
               // ── CTA Banner ───────────────────────────────────────────────
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-                  decoration: BoxDecoration(
-                    color: AppColors.cockpitBannerBg,
-                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      width: 1,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: GestureDetector(
+                  onTap: widget.onCtaPressed,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFE89A3C), Color(0xFFD48226)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFD48226).withValues(alpha: 0.35),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Plan Expedition Route',
-                              style: GoogleFonts.manrope(
-                                color: Colors.white,
-                                fontSize: 15.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              'Explore offline navigation & mountain passes',
-                              style: GoogleFonts.manrope(
-                                color: const Color(0xFFD1D5DB),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton(
-                        onPressed: widget.onCtaPressed,
-                        icon: Container(
-                          width: 44,
-                          height: 44,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
                           decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.15),
                             shape: BoxShape.circle,
-                            gradient: const LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                AppColors.tacticalOrangeLight,
-                                AppColors.tacticalOrange,
-                                AppColors.tacticalOrangeDark,
-                              ],
-                            ),
-                            boxShadow: AppColors.orangeGlow,
                           ),
-                          child: const Center(
-                            child: Icon(
-                              Icons.arrow_forward_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
+                          child: const Icon(
+                            Icons.navigation_rounded,
+                            size: 16,
+                            color: Colors.white,
                           ),
                         ),
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 44, minHeight: 44),
-                      ),
-                    ],
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'CAMP NAVIGATION',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                              Text(
+                                'Explore offline routes & topo maps',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 13,
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),

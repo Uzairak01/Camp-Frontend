@@ -251,6 +251,7 @@ void main() {
         modelName: '890 Adventure R',
         modelYear: 2024,
         odometerKm: 6450,
+        fuelLevelOdometerKm: 6450.0,
         displacement: 889,
         bikeType: 'Adventure',
         fuelSystem: FuelSystem.efi,

@@ -8,6 +8,7 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/utils/skeuomorphic_container.dart';
 import '../../../../core/widgets/widgets.dart';
+import '../../../auth/controllers/auth_controller.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
 import '../../../maintenance/controllers/maintenance_controller.dart';
 import '../../../maintenance/controllers/post_ride_report_controller.dart';
@@ -222,7 +223,7 @@ class AppDrawerWidget extends StatelessWidget {
 
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
+            onTap: () async {
               Navigator.of(context).pop();
               Navigator.of(context).pushNamed(CampRoutes.profile);
             },
@@ -292,7 +293,7 @@ class AppDrawerWidget extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: GestureDetector(
-          onTap: () {
+          onTap: () async {
             Navigator.of(context).pop();
             if (onTap != null) {
               onTap();
@@ -363,10 +364,13 @@ class AppDrawerWidget extends StatelessWidget {
       );
 
   Widget _logout(BuildContext context) => GestureDetector(
-        onTap: () {
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
+        onTap: () async {
+          final navigator = Navigator.of(context);
+          final messenger = ScaffoldMessenger.of(context);
+          navigator.pop();
+          await AuthController.instance.signOut();
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(
             SnackBar(
               content: const Text(
                 'Logged out successfully',
@@ -382,7 +386,7 @@ class AppDrawerWidget extends StatelessWidget {
               duration: const Duration(milliseconds: 2000),
             ),
           );
-          Navigator.of(context).pushNamed(CampRoutes.signIn);
+          navigator.pushNamedAndRemoveUntil(CampRoutes.signIn, (route) => false);
         },
         child: SkeuomorphicContainer(
           borderRadius: AppColors.radiusTile,

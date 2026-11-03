@@ -9,9 +9,11 @@ enum ServiceItemType {
   sparkPlug,
   tuning,
   brakes,
+  rearBrakes,
   tyres,
   battery,
-  carburetor;
+  carburetor,
+  custom;
 
   String get displayName {
     switch (this) {
@@ -29,12 +31,16 @@ enum ServiceItemType {
         return 'Tuning / Valve Clearance';
       case ServiceItemType.brakes:
         return 'Front Brake Pads';
+      case ServiceItemType.rearBrakes:
+        return 'Rear Brake Shoes / Pads';
       case ServiceItemType.tyres:
         return 'Tyres';
       case ServiceItemType.battery:
         return 'Battery';
       case ServiceItemType.carburetor:
         return 'Carburetor';
+      case ServiceItemType.custom:
+        return 'Custom Service';
     }
   }
 
@@ -54,12 +60,16 @@ enum ServiceItemType {
         return 'general-tuning';
       case ServiceItemType.brakes:
         return 'brake-pads';
+      case ServiceItemType.rearBrakes:
+        return 'rear-brake-pads';
       case ServiceItemType.tyres:
         return 'tyres';
       case ServiceItemType.battery:
         return 'battery';
       case ServiceItemType.carburetor:
         return 'carburetor';
+      case ServiceItemType.custom:
+        return 'custom-item';
     }
   }
 
@@ -79,12 +89,16 @@ enum ServiceItemType {
         return Icons.tune_rounded;
       case ServiceItemType.brakes:
         return Icons.radio_button_checked_rounded;
+      case ServiceItemType.rearBrakes:
+        return Icons.radio_button_unchecked_rounded;
       case ServiceItemType.tyres:
         return Icons.donut_large_rounded;
       case ServiceItemType.battery:
         return Icons.battery_charging_full_rounded;
       case ServiceItemType.carburetor:
         return Icons.speed_rounded;
+      case ServiceItemType.custom:
+        return Icons.handyman_rounded;
     }
   }
 
@@ -104,6 +118,7 @@ enum ServiceItemType {
       case ServiceItemType.tuning:
         return const [5000, 8000, 10000];
       case ServiceItemType.brakes:
+      case ServiceItemType.rearBrakes:
         return const [5000, 8000, 10000, 15000];
       case ServiceItemType.tyres:
         return const [10000, 15000, 20000];
@@ -111,6 +126,8 @@ enum ServiceItemType {
         return const [10000, 20000];
       case ServiceItemType.carburetor:
         return const [3000, 5000, 8000];
+      case ServiceItemType.custom:
+        return const [3000, 5000, 10000];
     }
   }
 
@@ -134,6 +151,7 @@ class ServiceScheduleItem {
     required this.id,
     required this.bikeId,
     required this.type,
+    this.customTitle,
     this.intervalKm,
     this.intervalMonths,
     this.lastDoneKm,
@@ -156,6 +174,7 @@ class ServiceScheduleItem {
         : 'sched-${DateTime.now().millisecondsSinceEpoch}';
 
     final bikeId = json['bikeId'] as String? ?? '';
+    final customTitle = json['customTitle'] as String?;
 
     // Tolerant parser for ServiceItemType
     final rawType = json['type']?.toString().toLowerCase().replaceAll(RegExp(r'[^a-z]'), '') ?? '';
@@ -187,6 +206,7 @@ class ServiceScheduleItem {
       id: effectiveId,
       bikeId: bikeId,
       type: resolvedType,
+      customTitle: customTitle,
       intervalKm: intervalKm,
       intervalMonths: intervalMonths,
       lastDoneKm: lastDoneKm,
@@ -200,6 +220,7 @@ class ServiceScheduleItem {
   final String id;
   final String bikeId;
   final ServiceItemType type;
+  final String? customTitle;
   final int? intervalKm;
   final int? intervalMonths;
   final double? lastDoneKm;
@@ -211,6 +232,11 @@ class ServiceScheduleItem {
   String get effectiveId => id;
   DateTime get effectiveCreatedAt => createdAt?.toUtc() ?? DateTime(2024, 1, 1).toUtc();
   DateTime get effectiveUpdatedAt => updatedAt?.toUtc() ?? effectiveCreatedAt;
+
+  /// User-facing display name, resolving customTitle for custom items.
+  String get displayName => (type == ServiceItemType.custom && customTitle != null && customTitle!.isNotEmpty)
+      ? customTitle!
+      : type.displayName;
 
   /// Whether the rider has entered at least one interval (distance or time).
   bool get hasInterval => (intervalKm != null && intervalKm! > 0) || (intervalMonths != null && intervalMonths! > 0);
@@ -231,6 +257,7 @@ class ServiceScheduleItem {
     String? id,
     String? bikeId,
     ServiceItemType? type,
+    String? customTitle,
     int? intervalKm,
     int? intervalMonths,
     double? lastDoneKm,
@@ -242,11 +269,13 @@ class ServiceScheduleItem {
     bool clearLastDoneDate = false,
     bool clearIntervalKm = false,
     bool clearIntervalMonths = false,
+    bool clearCustomTitle = false,
   }) {
     return ServiceScheduleItem(
       id: id ?? this.id,
       bikeId: bikeId ?? this.bikeId,
       type: type ?? this.type,
+      customTitle: clearCustomTitle ? null : (customTitle ?? this.customTitle),
       intervalKm: clearIntervalKm ? null : (intervalKm ?? this.intervalKm),
       intervalMonths: clearIntervalMonths ? null : (intervalMonths ?? this.intervalMonths),
       lastDoneKm: clearLastDoneKm ? null : (lastDoneKm ?? this.lastDoneKm),
@@ -261,6 +290,7 @@ class ServiceScheduleItem {
         'id': id,
         'bikeId': bikeId,
         'type': type.name,
+        if (customTitle != null) 'customTitle': customTitle,
         'intervalKm': intervalKm,
         'intervalMonths': intervalMonths,
         'lastDoneKm': lastDoneKm,
@@ -278,6 +308,7 @@ class ServiceScheduleItem {
           id == other.id &&
           bikeId == other.bikeId &&
           type == other.type &&
+          customTitle == other.customTitle &&
           intervalKm == other.intervalKm &&
           intervalMonths == other.intervalMonths &&
           lastDoneKm == other.lastDoneKm &&
@@ -289,6 +320,7 @@ class ServiceScheduleItem {
         id,
         bikeId,
         type,
+        customTitle,
         intervalKm,
         intervalMonths,
         lastDoneKm,

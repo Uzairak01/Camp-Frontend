@@ -6,5 +6,7 @@ abstract class ProfileRepository {
   Future<void> deleteProfile();
   Future<String?> loadProfilePhotoPath();
   Future<void> saveProfilePhotoPath(String? path);
+  Future<String?> loadLastUsedCountryCode();
+  Future<void> saveLastUsedCountryCode(String code);
   Future<void> flush();
 }

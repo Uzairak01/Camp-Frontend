@@ -19,6 +19,9 @@ class ProfileRepositoryLocal implements ProfileRepository {
     'Alex Henderson',
   };
 
+  /// Key for remembering the rider's last used country calling code.
+  static const String keyLastUsedCountryCode = 'camp_last_used_country_code';
+
   @override
   Future<UserProfile?> loadProfile() async {
     final json = await _store.readJson(LocalStore.keyProfile);
@@ -43,17 +46,32 @@ class ProfileRepositoryLocal implements ProfileRepository {
       profile = profile.copyWith(fullName: '');
       needsCleaning = true;
     }
-    if (profile.emergencyContactRelation != null &&
-        profile.emergencyContactRelation!.trim() == 'Emergency Contact' &&
-        (profile.emergencyContactName == null || profile.emergencyContactName!.trim().isEmpty)) {
+    if (profile.emergencyContactRelation.trim() == 'Emergency Contact' &&
+        profile.emergencyContactName.trim().isEmpty) {
       profile = profile.copyWith(emergencyContactRelation: '');
       needsCleaning = true;
     }
 
     // If id was generated or dates were missing or cleaned, re-save to ensure migrated state is persisted.
+    // Also re-save if legacy single emergency contact fields or legacy Pakistani 03... numbers were migrated.
+    final hadLegacyContactFormat = map['emergencyContacts'] == null &&
+        ((map['emergencyContactPhone'] != null && map['emergencyContactPhone'].toString().trim().isNotEmpty) ||
+            (map['emergencyContactName'] != null && map['emergencyContactName'].toString().trim().isNotEmpty));
+    bool hadPhoneMigration = false;
+    if (map['emergencyContacts'] is List) {
+      for (final raw in (map['emergencyContacts'] as List)) {
+        if (raw is Map && raw['phone'] != null) {
+          final p = raw['phone'].toString().trim().replaceAll(RegExp(r'[\s\-]'), '');
+          if (RegExp(r'^03[0-9]{9}$').hasMatch(p) || p.startsWith('920') || p.startsWith('+920')) {
+            hadPhoneMigration = true;
+            break;
+          }
+        }
+      }
+    }
     final hasGeneratedId = (map['id'] == null || (map['id'] as String).isEmpty);
     final hasMissingDates = map['createdAt'] == null || map['updatedAt'] == null;
-    if (needsCleaning || hasGeneratedId || hasMissingDates) {
+    if (needsCleaning || hasGeneratedId || hasMissingDates || hadLegacyContactFormat || hadPhoneMigration) {
       await saveProfile(profile);
     }
     return profile;
@@ -88,6 +106,23 @@ class ProfileRepositoryLocal implements ProfileRepository {
   @override
   Future<void> saveProfilePhotoPath(String? path) async {
     await _store.writeJson(LocalStore.keyProfilePhotoPath, path);
+  }
+
+  @override
+  Future<String?> loadLastUsedCountryCode() async {
+    final data = await _store.readJson(keyLastUsedCountryCode);
+    if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+    return null;
+  }
+
+  @override
+  Future<void> saveLastUsedCountryCode(String code) async {
+    final clean = code.replaceAll(RegExp(r'[^0-9]'), '').trim();
+    if (clean.isNotEmpty) {
+      await _store.writeJson(keyLastUsedCountryCode, clean);
+    }
   }
 
   @override

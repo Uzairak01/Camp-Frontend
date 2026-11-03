@@ -81,6 +81,7 @@ class Bike {
     required this.modelYear,
     required this.odometerKm,
     this.preciseOdometerKm,
+    this.fuelLevelOdometerKm,
     this.displacement,
     this.bikeType,
     this.fuelSystem = FuelSystem.carburetor,
@@ -124,6 +125,9 @@ class Bike {
 
     final rawOdo = json['odometerKm'] as int? ?? 0;
     final preciseOdo = (json['preciseOdometerKm'] as num?)?.toDouble();
+    final fuelLevelOdo = (json['fuelLevelOdometerKm'] as num?)?.toDouble() ??
+        preciseOdo ??
+        rawOdo.toDouble();
 
     final idStr = (json['id'] as String?)?.trim();
     final effectiveId = (idStr != null && idStr.isNotEmpty)
@@ -152,6 +156,7 @@ class Bike {
       modelYear: json['modelYear'] as int? ?? DateTime.now().year,
       odometerKm: rawOdo,
       preciseOdometerKm: preciseOdo,
+      fuelLevelOdometerKm: fuelLevelOdo,
       displacement: json['displacement'] as int?,
       bikeType: json['bikeType'] as String?,
       fuelSystem: json['fuelSystem'] == 'efi'
@@ -248,6 +253,10 @@ class Bike {
 
   /// High-precision odometer reading in km (e.g. 14820.4 km).
   final double? preciseOdometerKm;
+
+  /// Odometer reading in km at the moment the fuel level was set or refilled.
+  /// Used to compute current fuel remaining dynamically against current odometer.
+  final double? fuelLevelOdometerKm;
 
   /// Current estimated fuel volume in liters (clamped 0..fuelTankCapacityLiters).
   final double? fuelRemainingLiters;
@@ -347,6 +356,7 @@ class Bike {
     String? imagePath,
     int? odometerKm,
     double? preciseOdometerKm,
+    double? fuelLevelOdometerKm,
     double? fuelRemainingLiters,
     DateTime? lastFuelUpdate,
     double? lastFullRefillOdometer,
@@ -395,6 +405,7 @@ class Bike {
       imagePath: imagePath ?? this.imagePath,
       odometerKm: odometerKm ?? this.odometerKm,
       preciseOdometerKm: preciseOdometerKm ?? this.preciseOdometerKm,
+      fuelLevelOdometerKm: fuelLevelOdometerKm ?? this.fuelLevelOdometerKm,
       fuelRemainingLiters: newFuelLiters,
       lastFuelUpdate: lastFuelUpdate ?? this.lastFuelUpdate,
       lastFullRefillOdometer:
@@ -437,6 +448,7 @@ class Bike {
           imagePath == other.imagePath &&
           odometerKm == other.odometerKm &&
           preciseOdometerKm == other.preciseOdometerKm &&
+          fuelLevelOdometerKm == other.fuelLevelOdometerKm &&
           fuelRemainingLiters == other.fuelRemainingLiters &&
           lastFuelUpdate == other.lastFuelUpdate &&
           lastFullRefillOdometer == other.lastFullRefillOdometer &&
@@ -466,6 +478,7 @@ class Bike {
         imagePath,
         odometerKm,
         preciseOdometerKm,
+        fuelLevelOdometerKm,
         fuelRemainingLiters,
         lastFuelUpdate,
         lastFullRefillOdometer,
@@ -488,6 +501,7 @@ class Bike {
         'modelYear': modelYear,
         'odometerKm': odometerKm,
         'preciseOdometerKm': preciseOdometerKm,
+        'fuelLevelOdometerKm': fuelLevelOdometerKm,
         'displacement': displacement,
         'bikeType': bikeType,
         'fuelSystem': fuelSystem.name,

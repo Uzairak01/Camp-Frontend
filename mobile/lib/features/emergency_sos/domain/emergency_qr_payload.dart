@@ -1,3 +1,4 @@
+import '../../dashboard/domain/emergency_contact_model.dart';
 import '../../garage/domain/bike_model.dart';
 
 /// Result object holding the formatted QR text payload,
@@ -58,9 +59,10 @@ class EmergencyQrPayloadBuilder {
     required String bloodGroup,
     required String allergies,
     required String medicalNotes,
-    required String emergencyContactName,
-    required String emergencyContactPhone,
-    required String emergencyContactRelation,
+    List<EmergencyContact>? emergencyContacts,
+    String emergencyContactName = '',
+    String emergencyContactPhone = '',
+    String emergencyContactRelation = '',
     Bike? bike,
     bool includeBloodType = true,
     bool includeAllergies = true,
@@ -77,19 +79,18 @@ class EmergencyQrPayloadBuilder {
         allergies.trim().isNotEmpty ? allergies.trim() : 'None';
     final cleanNotes = medicalNotes.trim();
 
-    String iceContactStr = '';
-    final cName = emergencyContactName.trim();
-    final cPhone = emergencyContactPhone.trim();
-    final cRel = emergencyContactRelation.trim();
-    if (cName.isNotEmpty && cPhone.isNotEmpty) {
-      iceContactStr =
-          cRel.isNotEmpty ? '$cName ($cRel) - $cPhone' : '$cName - $cPhone';
-    } else if (cName.isNotEmpty) {
-      iceContactStr = cRel.isNotEmpty ? '$cName ($cRel)' : cName;
-    } else if (cPhone.isNotEmpty) {
-      iceContactStr = cPhone;
-    } else {
-      iceContactStr = 'Not set';
+    // Resolve emergency contacts (up to 3 included for scannable payload size)
+    List<EmergencyContact> contactsToInclude = [];
+    if (emergencyContacts != null && emergencyContacts.isNotEmpty) {
+      contactsToInclude = emergencyContacts.take(3).toList();
+    } else if (emergencyContactPhone.trim().isNotEmpty || emergencyContactName.trim().isNotEmpty) {
+      contactsToInclude = [
+        EmergencyContact(
+          name: emergencyContactName.trim(),
+          relation: emergencyContactRelation.trim(),
+          phone: emergencyContactPhone.trim(),
+        ),
+      ];
     }
 
     String? bikeLine;
@@ -117,7 +118,19 @@ class EmergencyQrPayloadBuilder {
         buffer.writeln('Medical Notes: ${notes.isNotEmpty ? notes : 'None'}');
       }
       if (includeEmergencyContact) {
-        buffer.write('ICE Contact: $iceContactStr');
+        if (contactsToInclude.isEmpty) {
+          buffer.writeln('ICE Contact: Not set');
+        } else if (contactsToInclude.length == 1) {
+          final c = contactsToInclude.first;
+          final rel = c.relation.isNotEmpty ? ' (${c.relation})' : '';
+          buffer.writeln('ICE Contact: ${c.name}$rel - ${c.phone}');
+        } else {
+          for (int i = 0; i < contactsToInclude.length; i++) {
+            final c = contactsToInclude[i];
+            final rel = c.relation.isNotEmpty ? ' (${c.relation})' : '';
+            buffer.writeln('ICE Contact ${i + 1}: ${c.name}$rel - ${c.phone}');
+          }
+        }
       }
       if (bikeLine != null) {
         if (buffer.isNotEmpty && !buffer.toString().endsWith('\n')) {

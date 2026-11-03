@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'maintenance_prediction_engine.dart';
 import 'post_ride_report.dart';
 import 'service_schedule_item.dart';
+import 'service_schedule_status_formatter.dart';
 
 /// Computed health and prediction for an individual service schedule item.
 @immutable
@@ -58,6 +59,9 @@ class ServiceSchedulePrediction {
   bool get isDue =>
       scheduleStatus == ScheduleItemStatus.overdue ||
       scheduleStatus == ScheduleItemStatus.dueSoon;
+
+  /// User-friendly status message formatted by the unified [ServiceScheduleStatusFormatter].
+  ServiceStatusMessage get friendlyStatus => ServiceScheduleStatusFormatter.format(this);
 
   /// Subtitle for display in cards and alerts.
   String get displaySubtitle {

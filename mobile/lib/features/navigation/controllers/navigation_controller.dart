@@ -5,11 +5,15 @@ import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../../core/data/app_repositories.dart';
+import '../../../core/data/place_repository.dart';
 import '../../garage/controllers/active_bike_controller.dart';
+import '../../garage/services/fuel_tracker_service.dart';
 import '../domain/geocoding_service.dart';
 import '../domain/location_service.dart';
 import '../domain/places_poi_service.dart';
 import '../domain/routing_service.dart';
+import 'current_place_controller.dart';
 
 /// Navigation workflow states.
 enum NavigationState {
@@ -26,6 +30,24 @@ enum NavigationState {
   arrived,
 }
 
+/// Lifecycle of a submit-only place search, driving the results panel.
+enum PlaceSearchStatus {
+  /// No search has been submitted (or it was cleared).
+  idle,
+
+  /// A request is in flight; show a progress indicator.
+  loading,
+
+  /// Results are available in [NavigationController.searchResults].
+  results,
+
+  /// The search succeeded but matched nothing.
+  empty,
+
+  /// The search failed (offline, timeout, server error).
+  failed,
+}
+
 /// Central state controller managing map interaction, route calculation,
 /// GPS position tracking, step advancement, and active guidance telemetry.
 class NavigationController extends ChangeNotifier {
@@ -35,11 +57,30 @@ class NavigationController extends ChangeNotifier {
     GeocodingService? geocodingService,
     PlacesPoiService? placesPoiService,
     ActiveBikeController? bikeController,
-  })  : _locationService = locationService ?? const GeolocatorLocationService(),
+    PlaceRepository? placeRepository,
+    CurrentPlaceController? currentPlaceController,
+  })  : _placeRepositoryOverride = placeRepository,
+        _locationService = locationService ?? const GeolocatorLocationService(),
         _routingService = routingService ?? OsrmRoutingService(),
         _geocodingService = geocodingService ?? NominatimGeocodingService(),
         _placesPoiService = placesPoiService ?? PlacesPoiService(),
-        _bikeController = bikeController ?? ActiveBikeController.instance;
+        _bikeController = bikeController ?? ActiveBikeController.instance,
+        _ownsCurrentPlaceController = currentPlaceController != null ||
+            locationService != null ||
+            geocodingService != null ||
+            placeRepository != null,
+        _currentPlaceController = currentPlaceController ??
+            ((locationService != null ||
+                    geocodingService != null ||
+                    placeRepository != null)
+                ? CurrentPlaceController(
+                    locationService: locationService,
+                    geocodingService: geocodingService,
+                    placeRepository: placeRepository,
+                  )
+                : CurrentPlaceController.instance) {
+    _currentPlaceController.addListener(_onCurrentPlaceChanged);
+  }
 
   static NavigationController instance = NavigationController();
 
@@ -48,12 +89,33 @@ class NavigationController extends ChangeNotifier {
   final GeocodingService _geocodingService;
   final PlacesPoiService _placesPoiService;
   final ActiveBikeController _bikeController;
+  final PlaceRepository? _placeRepositoryOverride;
+  final CurrentPlaceController _currentPlaceController;
+  final bool _ownsCurrentPlaceController;
+
+  void _onCurrentPlaceChanged() {
+    notifyListeners();
+  }
+
+  /// Saved/recent places store. Resolved lazily so tests can swap
+  /// [AppRepositories] after the controller is constructed.
+  PlaceRepository get _placeRepository =>
+      _placeRepositoryOverride ?? AppRepositories.instance.placeRepository;
 
   static const Distance _distanceCalc = Distance();
+
+  /// A saved place within this many metres of the rider names the location card.
+  static const double savedPlaceMatchRadiusMeters = 150.0;
+
+  /// Neutral label used when no saved name or neighbourhood label is available.
+  static const String fallbackLocationLabel = 'Your location';
 
   // ── State ──────────────────────────────────────────────────────────────────
   NavigationState _state = NavigationState.idle;
   PositionData? _currentPosition;
+  PositionData? _previousPosition;
+  int _lastGoodSpeedKmh = 0;
+  DateTime? _lastGoodSpeedTime;
   double? _currentHeading;
   StreamSubscription<PositionData>? _positionSub;
 
@@ -74,10 +136,14 @@ class NavigationController extends ChangeNotifier {
 
   bool _permissionDenied = false;
   bool _isLocationServiceEnabled = true;
+  String? _trackingWarningMessage;
 
-  String _currentLocationName = 'Current Location';
   String _currentLocationSubtitle = '';
-  DateTime? _lastReverseGeocodeTime;
+
+  // Forward search (submit-only) state shown under the search bar.
+  PlaceSearchStatus _searchStatus = PlaceSearchStatus.idle;
+  List<PlaceSearchResult> _searchResults = const [];
+  int _searchGeneration = 0;
 
   // Off-route tracking
   int _offRouteConsecutiveFixes = 0;
@@ -134,8 +200,30 @@ class NavigationController extends ChangeNotifier {
   bool get permissionDenied => _permissionDenied;
   bool get isLocationServiceEnabled => _isLocationServiceEnabled;
 
-  String get currentLocationName => _currentLocationName;
+  /// Name shown on the "YOUR LOCATION" card: delegated to the shared
+  /// [CurrentPlaceController] singleton for uniform place naming across all screens.
+  String get currentLocationName => _currentPlaceController.placeLabel;
   String get currentLocationSubtitle => _currentLocationSubtitle;
+
+  /// Name of the nearest saved place within [savedPlaceMatchRadiusMeters] of the
+  /// rider's real GPS fix, or null (also null when there is no fix).
+  String? get savedPlaceNameNearRider {
+    final here = _currentPosition?.toLatLng();
+    if (here == null) return null;
+    PlaceSearchResult? best;
+    double bestDistance = double.infinity;
+    for (final place in _savedPlaces) {
+      final d = _distanceCalc.as(LengthUnit.Meter, here, place.location);
+      if (d <= savedPlaceMatchRadiusMeters && d < bestDistance) {
+        best = place;
+        bestDistance = d;
+      }
+    }
+    return best?.name;
+  }
+
+  PlaceSearchStatus get searchStatus => _searchStatus;
+  List<PlaceSearchResult> get searchResults => List.unmodifiable(_searchResults);
 
   List<PlaceSearchResult> get recentPlaces => List.unmodifiable(_recentPlaces);
   List<PlaceSearchResult> get savedPlaces => List.unmodifiable(_savedPlaces);
@@ -164,13 +252,68 @@ class NavigationController extends ChangeNotifier {
     return null;
   }
 
-  /// Current speed formatted according to active [UnitsSystem].
-  /// Shows 0 when speed is null or negative.
+  /// Previous GPS fix stored for speed fallback calculation when the device
+  /// omits or reports 0 for speed.
+  PositionData? get previousPosition => _previousPosition;
+
+  /// Current speed in km/h.
+  ///
+  /// Uses the GPS-reported speed when positive. When the reported speed is null
+  /// or `<= 0`, falls back to `distance(previous fix, current fix) / dt` if the
+  /// time gap is between 1 and 10 seconds (inclusive) and the distance moved is
+  /// at least the current fix's horizontal accuracy. Retains the last good
+  /// positive speed for up to 3 seconds to prevent display flicker; otherwise
+  /// returns 0.
   int get currentSpeed {
-    final rawSpeedMs = _currentPosition?.speed;
-    if (rawSpeedMs == null || rawSpeedMs <= 0) return 0;
-    // m/s to km/h: 1 m/s = 3.6 km/h
-    return (rawSpeedMs * 3.6).round();
+    final pos = _currentPosition;
+    if (pos == null) return 0;
+
+    final computed = _computeFixSpeedKmh(pos, _previousPosition);
+    if (computed != null && computed > 0) {
+      return computed;
+    }
+
+    // Hold the last good value for up to 3 seconds to prevent speedometer flicker
+    if (_lastGoodSpeedKmh > 0 && _lastGoodSpeedTime != null) {
+      final elapsedMs =
+          pos.timestamp.difference(_lastGoodSpeedTime!).inMilliseconds;
+      if (elapsedMs >= 0 && elapsedMs <= 3000) {
+        return _lastGoodSpeedKmh;
+      }
+    }
+
+    return 0;
+  }
+
+  /// Evaluates speed in km/h for [current] using reported speed or distance/time
+  /// fallback from [previous]. Returns null if neither yields a valid moving speed.
+  int? _computeFixSpeedKmh(PositionData current, PositionData? previous) {
+    final rawSpeedMs = current.speed;
+    if (rawSpeedMs != null && rawSpeedMs > 0) {
+      return (rawSpeedMs * 3.6).round();
+    }
+
+    if (previous == null) return null;
+
+    final dtSeconds =
+        current.timestamp.difference(previous.timestamp).inMilliseconds /
+            1000.0;
+    if (dtSeconds < 1.0 || dtSeconds > 10.0) {
+      return null;
+    }
+
+    final distMeters = _distanceCalc.as(
+      LengthUnit.Meter,
+      previous.toLatLng(),
+      current.toLatLng(),
+    );
+    final minRequiredAccuracy = current.accuracy ?? 0.0;
+    if (distMeters <= 0 || distMeters < minRequiredAccuracy) {
+      return null;
+    }
+
+    final calcSpeedMs = distMeters / dtSeconds;
+    return (calcSpeedMs * 3.6).round();
   }
 
   /// Speed unit label ('KM / H').
@@ -246,7 +389,40 @@ class NavigationController extends ChangeNotifier {
     }
     await checkLocationPermissionAndStart();
     if (_disposed) return;
-    _reverseGeocodeCurrentLocation();
+    await loadPlaces();
+    if (_disposed) return;
+    await _currentPlaceController.initialize();
+  }
+
+  /// Loads saved and recent places from [PlaceRepository] into memory.
+  /// Failures are logged and leave the in-memory lists untouched so the map
+  /// stays usable.
+  Future<void> loadPlaces() async {
+    try {
+      final saved = await _placeRepository.loadSavedPlaces();
+      final recent = await _placeRepository.loadRecentPlaces();
+      if (_disposed) return;
+      _savedPlaces
+        ..clear()
+        ..addAll(saved);
+      _recentPlaces
+        ..clear()
+        ..addAll(recent);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('NavigationController.loadPlaces failed: $e');
+    }
+  }
+
+  /// Writes the in-memory saved/recent lists through [PlaceRepository].
+  /// Best-effort: a storage error is logged, never thrown into the UI.
+  Future<void> _persistPlaces() async {
+    try {
+      await _placeRepository.saveSavedPlaces(List.of(_savedPlaces));
+      await _placeRepository.saveRecentPlaces(List.of(_recentPlaces));
+    } catch (e) {
+      debugPrint('NavigationController._persistPlaces failed: $e');
+    }
   }
 
   /// Checks whether location services are enabled on device and verifies permissions.
@@ -307,7 +483,21 @@ class NavigationController extends ChangeNotifier {
 
   void _handlePositionUpdate(PositionData pos) {
     final wasPositionNull = _currentPosition == null;
+    _previousPosition = _currentPosition;
     _currentPosition = pos;
+
+    // Update last good speed cache when this fix produces a positive speed.
+    // A negative GPS speed is an invalid reading rather than a momentary
+    // stationary fix, so it must not leave a stale value on the speedometer.
+    final fixSpeedKmh = _computeFixSpeedKmh(pos, _previousPosition);
+    if (fixSpeedKmh != null && fixSpeedKmh > 0) {
+      _lastGoodSpeedKmh = fixSpeedKmh;
+      _lastGoodSpeedTime = pos.timestamp;
+    } else if (pos.speed != null && pos.speed! < 0) {
+      _lastGoodSpeedKmh = 0;
+      _lastGoodSpeedTime = null;
+    }
+
     if (pos.heading != null && pos.heading! >= 0) {
       _currentHeading = pos.heading;
     }
@@ -322,6 +512,8 @@ class NavigationController extends ChangeNotifier {
     }
 
     notifyListeners();
+    // Keep the shared current place controller in step with the rider's movement.
+    _currentPlaceController.updatePosition(pos);
   }
 
   // ── Navigation Engine Logic ────────────────────────────────────────────────
@@ -464,6 +656,12 @@ class NavigationController extends ChangeNotifier {
         waypoints: waypoints,
         requestAlternatives: false,
       );
+      if (_disposed) return;
+
+      // Only replace route and reset step index when a valid new route is actually received.
+      if (newRoute.polyline.isEmpty || newRoute.steps.isEmpty) {
+        return;
+      }
 
       _route = newRoute;
       _currentStepIndex = 0;
@@ -472,7 +670,7 @@ class NavigationController extends ChangeNotifier {
       _eta = DateTime.now().add(Duration(seconds: newRoute.durationSeconds.round()));
       notifyListeners();
     } catch (_) {
-      // Retain existing route if re-routing network request fails
+      // Retain existing route, polyline, and _currentStepIndex unchanged if re-routing fails.
     }
   }
 
@@ -556,8 +754,18 @@ class NavigationController extends ChangeNotifier {
     }
   }
 
+  /// Non-blocking warning message if ride tracking could not start when navigating.
+  String? get trackingWarningMessage => _trackingWarningMessage;
+
+  /// Dismisses any active tracking warning message.
+  void clearTrackingWarning() {
+    _trackingWarningMessage = null;
+    notifyListeners();
+  }
+
   /// State 2 -> State 3: Enter active guidance.
-  void startNavigation() {
+  /// Also starts live ride tracking via [FuelTrackerService] if no ride is running.
+  Future<void> startNavigation() async {
     if (_route == null) return;
     _state = NavigationState.navigating;
     _currentStepIndex = 0;
@@ -565,6 +773,23 @@ class NavigationController extends ChangeNotifier {
     _enableWakelock();
     startPositionStream(); // High accuracy
     notifyListeners();
+
+    // Couple ride tracking with navigation
+    final destinationTitle = _destination?.name;
+    if (!FuelTrackerService.instance.isRiding) {
+      final started = await FuelTrackerService.instance.startRide(
+        routeTitle: destinationTitle,
+      );
+      if (!started && FuelTrackerService.instance.locationErrorMessage != null) {
+        _trackingWarningMessage =
+            FuelTrackerService.instance.locationErrorMessage;
+        notifyListeners();
+      }
+    } else if (destinationTitle != null &&
+        (FuelTrackerService.instance.routeTitle == null ||
+            FuelTrackerService.instance.routeTitle!.isEmpty)) {
+      FuelTrackerService.instance.setRouteTitle(destinationTitle);
+    }
   }
 
   /// State 3 -> State 1: Exit navigation guidance.
@@ -574,6 +799,8 @@ class NavigationController extends ChangeNotifier {
     _destination = null;
     _stops.clear();
     _currentStepIndex = 0;
+    _lastGoodSpeedKmh = 0;
+    _lastGoodSpeedTime = null;
     _disableWakelock();
     startPositionStream(); // Medium accuracy
     notifyListeners();
@@ -627,8 +854,10 @@ class NavigationController extends ChangeNotifier {
     if (_destination == null || _currentPosition == null) return;
     // Swap start and destination endpoints using real rider GPS fix
     _destination = PlaceSearchResult(
-      name: _currentLocationName,
-      displayName: '$_currentLocationName, WA',
+      name: currentLocationName,
+      displayName: _currentLocationSubtitle.isNotEmpty
+          ? _currentLocationSubtitle
+          : currentLocationName,
       location: _currentPosition!.toLatLng(),
     );
     calculateRoute();
@@ -656,6 +885,42 @@ class NavigationController extends ChangeNotifier {
       _savedPlaces.add(place);
     }
     notifyListeners();
+    unawaited(_persistPlaces());
+  }
+
+  /// Saves the rider's current GPS position under [name] (e.g. "Home") via
+  /// [PlaceRepository]. A saved place already within
+  /// [savedPlaceMatchRadiusMeters] is renamed instead of duplicated, so
+  /// renaming the same spot twice keeps one entry. No-op without a GPS fix or
+  /// with a blank name; returns whether a place was saved.
+  Future<bool> saveCurrentLocationAs(String name) async {
+    final trimmed = name.trim();
+    final here = _currentPosition?.toLatLng();
+    if (trimmed.isEmpty || here == null) return false;
+
+    final place = PlaceSearchResult(
+      name: trimmed,
+      // Keep the neighbourhood label as the address line under the name.
+      displayName: _currentPlaceController.lastPlaceLabel ?? trimmed,
+      location: here,
+      category: 'saved',
+    );
+
+    final existing = _savedPlaces.indexWhere(
+      (p) =>
+          _distanceCalc.as(LengthUnit.Meter, here, p.location) <=
+          savedPlaceMatchRadiusMeters,
+    );
+    if (existing >= 0) {
+      // Reuse the id so the repository updates the record in place.
+      _savedPlaces[existing] = place.copyWith(id: _savedPlaces[existing].id);
+    } else {
+      _savedPlaces.add(place);
+    }
+    notifyListeners();
+    await _persistPlaces();
+    await _currentPlaceController.reloadSavedPlaces();
+    return true;
   }
 
   bool isPlaceSaved(PlaceSearchResult place) {
@@ -690,7 +955,7 @@ class NavigationController extends ChangeNotifier {
       case PoiType.mechanic:
         _poiMarkers = _placesPoiService.fetchNearbyMechanics(
           pos,
-          _currentLocationName,
+          currentLocationName,
         );
         break;
       case PoiType.fuel:
@@ -715,29 +980,47 @@ class NavigationController extends ChangeNotifier {
 
   // ── Geocoding ──────────────────────────────────────────────────────────────
 
-  Future<List<PlaceSearchResult>> searchPlaces(String query) async {
-    return _geocodingService.search(query);
+  /// Runs a forward place search for [query]. Called only when the rider
+  /// submits (keyboard search key or search icon) - never while typing, per the
+  /// Nominatim policy. A newer submit supersedes any older one: the older
+  /// response is dropped so stale results can never overwrite fresh ones.
+  /// Every outcome (results, empty, failure) is surfaced through [searchStatus].
+  Future<void> submitSearch(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return;
+
+    final generation = ++_searchGeneration;
+    _searchStatus = PlaceSearchStatus.loading;
+    _searchResults = const [];
+    notifyListeners();
+
+    try {
+      final results = await _geocodingService.search(trimmed, near: userLatLng);
+      if (_disposed || generation != _searchGeneration) return;
+      _searchResults = results;
+      _searchStatus =
+          results.isEmpty ? PlaceSearchStatus.empty : PlaceSearchStatus.results;
+    } on GeocodingCancelledException {
+      // A newer search owns the UI state now.
+      return;
+    } catch (e) {
+      if (_disposed || generation != _searchGeneration) return;
+      debugPrint('NavigationController.submitSearch failed: $e');
+      _searchResults = const [];
+      _searchStatus = PlaceSearchStatus.failed;
+    }
+    notifyListeners();
   }
 
-  /// Reverse-geocodes user's current GPS location into human-readable place name.
-  /// Throttled to at most once per 5 seconds. Does nothing if GPS position is null
-  /// to ensure the fallback center is never saved or resolved as the user's location.
-  Future<void> _reverseGeocodeCurrentLocation() async {
-    if (_currentPosition == null) return;
-
-    final now = DateTime.now();
-    if (_lastReverseGeocodeTime != null &&
-        now.difference(_lastReverseGeocodeTime!).inSeconds < 5) {
+  /// Clears search results and invalidates any in-flight search.
+  void clearSearch() {
+    _searchGeneration++;
+    if (_searchStatus == PlaceSearchStatus.idle && _searchResults.isEmpty) {
       return;
     }
-    _lastReverseGeocodeTime = now;
-
-    final place = await _geocodingService.reverseGeocode(_currentPosition!.toLatLng());
-    if (place != null) {
-      _currentLocationName = place.name;
-      _currentLocationSubtitle = place.displayName;
-      notifyListeners();
-    }
+    _searchStatus = PlaceSearchStatus.idle;
+    _searchResults = const [];
+    notifyListeners();
   }
 
   // ── Wakelock Management ────────────────────────────────────────────────────
@@ -760,11 +1043,17 @@ class NavigationController extends ChangeNotifier {
     if (_recentPlaces.length > 5) {
       _recentPlaces.removeLast();
     }
+    // Recent searches persist through PlaceRepository.
+    unawaited(_persistPlaces());
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _currentPlaceController.removeListener(_onCurrentPlaceChanged);
+    if (_ownsCurrentPlaceController) {
+      _currentPlaceController.dispose();
+    }
     _positionSub?.cancel();
     _positionSub = null;
     _disableWakelock();

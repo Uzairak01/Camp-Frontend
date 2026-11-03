@@ -87,10 +87,23 @@ class ActiveBikeController extends ChangeNotifier {
   }
 
   /// Update specifications or telemetry milestone records of an existing bike.
+  /// If the odometer reading is corrected downwards below [fuelLevelOdometerKm],
+  /// [fuelLevelOdometerKm] is automatically reset to the new odometer reading so fuel
+  /// does not estimate above what was set.
   void updateBike(Bike updatedBike) {
-    final index = _bikes.indexWhere((b) => b.id == updatedBike.id);
+    final currentOdo =
+        updatedBike.preciseOdometerKm ?? updatedBike.odometerKm.toDouble();
+    var bikeToSave = updatedBike;
+    if (bikeToSave.fuelLevelOdometerKm != null &&
+        currentOdo < bikeToSave.fuelLevelOdometerKm!) {
+      bikeToSave = bikeToSave.copyWith(
+        fuelLevelOdometerKm: currentOdo,
+      );
+    }
+
+    final index = _bikes.indexWhere((b) => b.id == bikeToSave.id);
     if (index != -1) {
-      _bikes[index] = updatedBike;
+      _bikes[index] = bikeToSave;
       notifyListeners();
       save();
     }

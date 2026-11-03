@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/routes.dart';
 import '../../controllers/auth_controller.dart';
 import '../theme/auth_colors.dart';
 import '../widgets/auth_background_scaffold.dart';
@@ -11,7 +12,11 @@ import '../widgets/auth_text_field.dart';
 import '../widgets/motorcycle_badge.dart';
 import '../widgets/password_strength_indicator.dart';
 
-/// CAMP Create Account / Register Rider Screen
+/// CAMP Create Account / Register Rider Screen.
+///
+/// Features translucent glassmorphism over the dusk background, empty input fields,
+/// robust client validation, dynamic password strength metering, and persistent
+/// local account creation.
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
 
@@ -20,24 +25,24 @@ class SignUpScreen extends StatefulWidget {
 }
 
 class _SignUpScreenState extends State<SignUpScreen> {
-  final _fullNameController = TextEditingController(text: 'Alex Henderson');
-  final _emailController = TextEditingController(text: 'alex@bmwmoto.com');
-  final _phoneController = TextEditingController(text: '+1 (555) 019–2834');
-  final _passwordController = TextEditingController(text: 'CampMotoRider2026!');
+  final _fullNameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _obscurePassword = true;
-  int _passwordStrength = 3;
+  int _passwordStrength = 0;
   bool _isLoading = false;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _passwordStrength = AuthController.instance.calculateStrength(_passwordController.text);
     _passwordController.addListener(_onPasswordChanged);
   }
 
   void _onPasswordChanged() {
-    final strength = AuthController.instance.calculateStrength(_passwordController.text);
+    final strength =
+        AuthController.instance.calculateStrength(_passwordController.text);
     if (strength != _passwordStrength) {
       setState(() => _passwordStrength = strength);
     }
@@ -61,7 +66,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
         content: Row(
           children: [
             Icon(
-              isError ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
+              isError
+                  ? Icons.error_outline_rounded
+                  : Icons.check_circle_outline_rounded,
               color: isError ? Colors.redAccent : AuthColors.orangeLight,
               size: 20,
             ),
@@ -83,7 +90,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-            color: isError ? Colors.redAccent.withValues(alpha: 0.5) : AuthColors.orangeBadgeBorder,
+            color: isError
+                ? Colors.redAccent.withValues(alpha: 0.5)
+                : AuthColors.orangeBadgeBorder,
             width: 1,
           ),
         ),
@@ -109,11 +118,12 @@ class _SignUpScreenState extends State<SignUpScreen> {
     setState(() => _isLoading = false);
 
     if (success) {
-      _showNotification('Rider Profile registered! Syncing telemetry node...');
-      Navigator.of(context).pushReplacementNamed('/');
+      _showNotification('Rider profile registered successfully!');
+      Navigator.of(context).pushReplacementNamed(CampRoutes.home);
     } else {
       setState(() {
-        _errorMessage = AuthController.instance.state.errorMessage ?? 'Registration failed';
+        _errorMessage = AuthController.instance.state.errorMessage ??
+            'Registration failed. Please check your details.';
       });
       _showNotification(_errorMessage!, isError: true);
     }
@@ -124,7 +134,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
     return AuthBackgroundScaffold(
       topBar: AuthBrandHeader.signUp(
         onBack: () => Navigator.of(context).maybePop(),
-        onSyncTap: () => _showNotification('Telemetry Node: Synchronized (Ping 18ms)'),
       ),
       bottomBar: _buildFooter(context),
       child: Center(
@@ -176,7 +185,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     AuthTextField(
                       label: 'Full Name',
                       controller: _fullNameController,
-                      hintText: 'Alex Henderson',
+                      hintText: 'Full name',
                       prefixIcon: Icons.person_outline_rounded,
                       textInputAction: TextInputAction.next,
                     ),
@@ -187,7 +196,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     AuthTextField(
                       label: 'Email Address',
                       controller: _emailController,
-                      hintText: 'alex@bmwmoto.com',
+                      hintText: 'Email',
                       prefixIcon: Icons.mail_outline_rounded,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
@@ -200,7 +209,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     AuthTextField(
                       label: 'Phone Number',
                       controller: _phoneController,
-                      hintText: '+1 (555) 019–2834',
+                      hintText: 'Phone number',
                       prefixIcon: Icons.phone_outlined,
                       keyboardType: TextInputType.phone,
                       textInputAction: TextInputAction.next,
@@ -211,9 +220,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     // ── Field 4: Create Password + Strength ──────────────────
                     AuthTextField(
                       label: 'Create Password',
-                      labelTrailing: PasswordStrengthIndicator(strength: _passwordStrength),
+                      labelTrailing: PasswordStrengthIndicator(
+                        strength: _passwordStrength,
+                      ),
                       controller: _passwordController,
-                      hintText: '••••••••••••',
+                      hintText: 'Password (min. 8 characters)',
                       prefixIcon: Icons.lock_outline_rounded,
                       obscureText: _obscurePassword,
                       textInputAction: TextInputAction.done,
@@ -223,7 +234,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           setState(() => _obscurePassword = !_obscurePassword);
                         },
                         child: Icon(
-                          _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
                           color: AuthColors.inputIcon,
                           size: 20,
                         ),
@@ -232,7 +245,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
                     const SizedBox(height: 22),
 
-                    // ── Register Rider Profile CTA Button ────────────────────
+                    // ── Solid Orange CTA Button ──────────────────────────────
                     AuthPrimaryButton(
                       label: 'Register Rider Profile',
                       isLoading: _isLoading,
@@ -241,7 +254,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
                     const SizedBox(height: 14),
 
-                    // ── Disclaimer Terms of Service & Privacy Policy ─────────
+                    // ── Terms of Service & Privacy Policy ────────────────────
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: Text.rich(
@@ -302,7 +315,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
             ),
           ),
           GestureDetector(
-            onTap: () => Navigator.of(context).pushReplacementNamed('/sign-in'),
+            onTap: () =>
+                Navigator.of(context).pushReplacementNamed(CampRoutes.signIn),
             child: Text(
               'Sign In',
               style: GoogleFonts.manrope(
