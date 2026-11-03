@@ -3,7 +3,7 @@
 [![Flutter](https://img.shields.io/badge/Flutter-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart_%5E3.13.4-0175C2?logo=dart&logoColor=white)](https://dart.dev)
 [![Firebase](https://img.shields.io/badge/Firebase-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com)
-[![Tests](https://img.shields.io/badge/mobile%20tests-454%2B%20passing-22C55E)](mobile/test/)
+[![Tests](https://img.shields.io/badge/mobile%20tests-507%2B%20passing-22C55E)](mobile/test/)
 [![Analyze](https://img.shields.io/badge/flutter%20analyze-0%20issues-22C55E)](mobile/analysis_options.yaml)
  
 A Flutter mobile app for adventure motorcyclists in Pakistan. CAMP keeps track of your bike, your service schedule, your fuel and your costs, and gives you an emergency card you can print and stick on your bike or helmet.
@@ -13,10 +13,10 @@ A Flutter mobile app for adventure motorcyclists in Pakistan. CAMP keeps track o
 > Final Year Project, BSCS, University of Lahore (2026). Team: Uzair Ahmad Khan, Hassan, Ali Moeed. Supervisor: Ma'am Aqsa Shahzad.
  
 <p align="center">
-  <img src="docs/screenshots/home.png" width="22%" alt="Home" />
-  <img src="docs/screenshots/finances.png" width="22%" alt="Finances and maintenance" />
-  <img src="docs/screenshots/emergency-qr.png" width="22%" alt="Emergency QR" />
-  <img src="docs/screenshots/mechanics.png" width="22%" alt="Mechanics" />
+  <img src="mobile/docs/screenshots/Home.jpeg" width="22%" alt="Home" />
+  <img src="mobile/docs/screenshots/Finances_and_maintenance.jpeg" width="22%" alt="Finances_and_maintenance" />
+  <img src="mobile/docs/screenshots/Garage.jpeg" width="22%" alt="Garage" />
+  <img src="mobile/docs/screenshots/Mechanics.jpeg" width="22%" alt="Mechanics" />
 </p>
 <!-- Add 4 to 6 phone screenshots to docs/screenshots/ with the names above. Demo video: [Watch the demo](LINK) -->
  
