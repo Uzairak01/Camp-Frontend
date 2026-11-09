@@ -3,14 +3,20 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
 
 class FilterChipsWidget extends StatelessWidget {
-  final String selectedFilter;
-  final ValueChanged<String> onFilterSelected;
-
   const FilterChipsWidget({
-    super.key,
     required this.selectedFilter,
     required this.onFilterSelected,
+    this.allCount = 0,
+    this.openNowCount = 0,
+    this.emergencyCount = 0,
+    super.key,
   });
+
+  final String selectedFilter;
+  final ValueChanged<String> onFilterSelected;
+  final int allCount;
+  final int openNowCount;
+  final int emergencyCount;
 
   static const LinearGradient _orangeGradient = LinearGradient(
     begin: Alignment.topLeft,
@@ -21,12 +27,9 @@ class FilterChipsWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filters = [
-      {'id': 'all', 'label': 'All', 'count': '14'},
-      {'id': 'verified', 'label': 'Verified Only', 'isVerified': true},
-      {'id': 'bmw', 'label': 'BMW Certified'},
-      {'id': 'ktm', 'label': 'KTM Adventure'},
-      {'id': 'yamaha', 'label': 'Yamaha'},
-      {'id': 'emergency', 'label': 'Emergency Pitstop'},
+      {'id': 'all', 'label': 'All', 'count': allCount.toString()},
+      {'id': 'open_now', 'label': 'Open now', 'count': openNowCount.toString()},
+      {'id': 'emergency', 'label': 'Emergency Pitstop', 'count': emergencyCount.toString()},
     ];
 
     return SizedBox(
@@ -38,136 +41,67 @@ class FilterChipsWidget extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final filter = filters[index];
-          final id = filter['id'] as String;
-          final label = filter['label'] as String;
+          final id = filter['id']!;
+          final label = filter['label']!;
           final isSelected = selectedFilter == id;
-          final isVerified = filter['isVerified'] == true;
-          final count = filter['count'] as String?;
+          final count = filter['count'];
 
-          if (id == 'all') {
-            return GestureDetector(
-              onTap: () => onFilterSelected(id),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  gradient: isSelected ? _orangeGradient : null,
-                  color: isSelected ? null : AppColors.clay,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSelected
-                        ? Colors.transparent
-                        : AppColors.clayDark,
-                    width: 1.2,
-                  ),
-                  boxShadow: isSelected
-                      ? AppColors.orangeGlow
-                      : AppColors.skeuRaisedSmall,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: AppTextStyles.body.copyWith(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: isSelected ? Colors.white : AppColors.darkCharcoal,
-                      ),
-                    ),
-                    if (count != null) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: isSelected
-                              ? AppColors.tacticalOrangeDark
-                              : AppColors.clayDark,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          count,
-                          style: AppTextStyles.caption.copyWith(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: isSelected
-                                ? Colors.white
-                                : AppColors.mutedText,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            );
-          }
-
-          if (isVerified) {
-            return GestureDetector(
-              onTap: () => onFilterSelected(id),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFFFF0DB) : AppColors.clay,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSelected
-                        ? AppColors.tacticalOrange
-                        : AppColors.clayDark,
-                    width: 1.2,
-                  ),
-                  boxShadow: AppColors.skeuRaisedSmall,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.check_circle_outline_rounded,
-                      size: 15,
-                      color: AppColors.tacticalOrangeDark,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      label,
-                      style: AppTextStyles.body.copyWith(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.tacticalOrangeDark,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }
-
-          // Generic Filter Pill
           return GestureDetector(
             onTap: () => onFilterSelected(id),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.darkCharcoal : AppColors.clay,
+                gradient: isSelected ? _orangeGradient : null,
+                color: isSelected ? null : AppColors.clay,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: isSelected
-                      ? AppColors.darkCharcoal
+                      ? Colors.transparent
                       : AppColors.clayDark,
                   width: 1.2,
                 ),
-                boxShadow: AppColors.skeuRaisedSmall,
+                boxShadow: isSelected
+                    ? AppColors.orangeGlow
+                    : AppColors.skeuRaisedSmall,
               ),
-              child: Text(
-                label,
-                style: AppTextStyles.body.copyWith(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: isSelected ? Colors.white : AppColors.darkCharcoal,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: AppTextStyles.body.copyWith(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected ? Colors.white : AppColors.darkCharcoal,
+                    ),
+                  ),
+                  if (count != null) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.tacticalOrangeDark
+                            : AppColors.clayDark,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        count,
+                        style: AppTextStyles.caption.copyWith(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: isSelected
+                              ? Colors.white
+                              : AppColors.mutedText,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           );

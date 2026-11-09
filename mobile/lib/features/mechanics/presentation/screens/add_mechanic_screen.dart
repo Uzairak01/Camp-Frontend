@@ -1,173 +1,416 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/widgets/camp_app_bar.dart';
 import '../../../../core/widgets/camp_bottom_nav.dart';
-import '../../../dashboard/presentation/widgets/tactical_bottom_dock_widget.dart';
+import '../../../../core/widgets/labeled_text_field.dart';
+import '../../../../core/widgets/primary_button.dart';
+import '../../../navigation/domain/location_service.dart';
+import '../../controllers/mechanic_controller.dart';
 import '../../domain/mechanic_model.dart';
+import '../../domain/mechanic_open_status.dart';
+import '../widgets/map_pin_picker_modal.dart';
 
+/// Screen for adding or editing a community roadside mechanic / workshop.
+/// Follows the tactile CAMP clay design language with recessed inputs,
+/// camera/gallery photo picker, and persistent storage.
 class AddMechanicScreen extends StatefulWidget {
-  const AddMechanicScreen({super.key});
+  const AddMechanicScreen({
+    super.key,
+    this.mechanic,
+    this.locationService,
+    this.tileProvider,
+  });
+
+  final Mechanic? mechanic;
+  final LocationService? locationService;
+  final TileProvider? tileProvider;
 
   @override
   State<AddMechanicScreen> createState() => _AddMechanicScreenState();
 }
 
 class _AddMechanicScreenState extends State<AddMechanicScreen> {
-  static const LinearGradient _orangeGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [AppColors.tacticalOrangeLight, AppColors.tacticalOrange],
-  );
+  late final TextEditingController _nameController;
+  late final TextEditingController _phoneController;
+  late final TextEditingController _addressController;
+  late final TextEditingController _specialityController;
+  late final TextEditingController _notesController;
 
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _locationController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _notesController = TextEditingController();
+  double? _latitude;
+  double? _longitude;
 
-  String _gpsCoordinates = '35.1824° N,\n74.0291° E';
-  String? _uploadedPhotoName;
+  String? _photoPath;
+  bool _nameError = false;
+  String? _phoneError;
 
-  // Selected Brand Chips (Pre-selected matching the provided screenshot)
-  final Set<String> _selectedBrands = {
-    'Honda',
-    'Suzuki',
-    'Yamaha',
-    'Royal Enfield',
-  };
+  List<int> _openDays = [];
+  int? _openMinutes;
+  int? _closeMinutes;
+  bool _open24Hours = false;
+  String? _hoursError;
 
-  final List<String> _allBrands = [
-    'Honda',
-    'Suzuki',
-    'Yamaha',
-    'Kawasaki',
-    'Royal Enfield',
-    'BMW Motorrad',
-    'Other / Chinese Trikes',
-  ];
+  bool get _isEditing => widget.mechanic != null;
 
-  // Selected Specialty Chips (Pre-selected matching the provided screenshot)
-  final Set<String> _selectedSpecialties = {
-    'Engine',
-    'Tires & Tube Vulcanizing',
-    'Carb Jetting',
-  };
+  @override
+  void initState() {
+    super.initState();
+    final mech = widget.mechanic;
+    _nameController = TextEditingController(text: mech?.name ?? '');
+    _phoneController = TextEditingController(text: mech?.phone ?? '');
+    _addressController = TextEditingController(
+      text: mech?.address ?? (mech?.durationOrLocation ?? ''),
+    );
+    _latitude = mech?.latitude;
+    _longitude = mech?.longitude;
+    _specialityController = TextEditingController(
+      text: mech != null && mech.tags1.isNotEmpty ? mech.tags1.join(', ') : '',
+    );
+    _notesController = TextEditingController(text: mech?.notes ?? '');
+    _photoPath = mech?.photoPath;
 
-  final List<String> _allSpecialties = [
-    'Engine',
-    'Tires & Tube Vulcanizing',
-    'Carb Jetting',
-    'Suspension',
-    'Electrical & Stator',
-    'General Field Repair',
-  ];
+    if (mech != null) {
+      _openDays = List<int>.from(mech.openDays);
+      _openMinutes = mech.openMinutes;
+      _closeMinutes = mech.closeMinutes;
+      _open24Hours = mech.open24Hours;
+    }
+  }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _locationController.dispose();
     _phoneController.dispose();
+    _addressController.dispose();
+    _specialityController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
-  void _onGpsTap() {
-    setState(() {
-      _gpsCoordinates = '35.1824° N,\n74.0291° E';
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Row(
-          children: [
-            Icon(Icons.gps_fixed_rounded, color: Colors.white, size: 18),
-            SizedBox(width: 8),
-            Text('GPS Coordinates Locked (35.1824° N, 74.0291° E)'),
-          ],
-        ),
-        backgroundColor: AppColors.tacticalOrange,
-        duration: Duration(milliseconds: 1500),
-      ),
-    );
+  /// Ensures picked photos outside app storage are copied to the app documents directory
+  /// so they survive app restarts and temporary cache purges.
+  Future<String> _persistImage(String pickedPath) async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final mechanicsDir = Directory('${docsDir.path}/mechanics');
+      if (!await mechanicsDir.exists()) {
+        await mechanicsDir.create(recursive: true);
+      }
+      if (pickedPath.startsWith(docsDir.path)) {
+        return pickedPath;
+      }
+      final extension = pickedPath.contains('.') ? pickedPath.split('.').last : 'jpg';
+      final fileName = 'mech_${DateTime.now().millisecondsSinceEpoch}.$extension';
+      final targetFile = File('${mechanicsDir.path}/$fileName');
+      final copied = await File(pickedPath).copy(targetFile.path);
+      return copied.path;
+    } catch (_) {
+      // Gracefully fall back to original picked path if storage copy fails
+      return pickedPath;
+    }
   }
 
-  void _onPhotoTap() {
-    setState(() {
-      _uploadedPhotoName = _uploadedPhotoName == null
-          ? 'signboard_workshop_babusar.jpg'
-          : null;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _uploadedPhotoName != null
-              ? 'Signboard photo attached successfully!'
-              : 'Photo removed.',
-        ),
-        backgroundColor: _uploadedPhotoName != null
-            ? AppColors.statusGreen
-            : AppColors.mutedText,
-        duration: const Duration(milliseconds: 1400),
-      ),
-    );
-  }
-
-  void _submitMechanic() {
-    final name = _nameController.text.trim().isNotEmpty
-        ? _nameController.text.trim()
-        : 'Babusar Valley Moto Spares & Welding';
-
-    final manualLocation = _locationController.text.trim().isNotEmpty
-        ? _locationController.text.trim()
-        : 'Babusar Valley Pass';
-
-    final phone = _phoneController.text.trim().isNotEmpty
-        ? '+92 ${_phoneController.text.trim()}'
-        : '+92 300 1234567';
-
-    final newMechanic = Mechanic(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name,
-      distance: '0.8 km away',
-      durationOrLocation: manualLocation,
-      badgeType: BadgeType.verified,
-      badgeLabel: 'Pending Verification',
-      beaconStatus: 'Community Contributor',
-      beaconColor: AppColors.tacticalOrange,
-      categoryTitle1: 'BRANDS SERVICED',
-      tags1: _selectedBrands.isNotEmpty
-          ? _selectedBrands.toList()
-          : ['Universal Adventure'],
-      categoryTitle2: 'SPECIALTY & TOOLS',
-      tags2: _selectedSpecialties.isNotEmpty
-          ? _selectedSpecialties.toList()
-          : ['General Field Repair'],
-      rating: 5.0,
-      reviewCount: 1,
-      openStatus: 'JUST ADDED (Pending Review)',
-      phone: phone,
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '$name submitted for CAMP verification!',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
+  Future<void> _pickImage(ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: source,
+        maxWidth: 1200,
+        maxHeight: 1200,
+        imageQuality: 85,
+      );
+      if (picked != null) {
+        final persisted = await _persistImage(picked.path);
+        if (mounted) {
+          setState(() {
+            _photoPath = persisted;
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Camera or storage access was not available. Please check device permissions.',
             ),
-          ],
+            backgroundColor: AppColors.darkCharcoal,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showImageSourcePicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.clay,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          boxShadow: AppColors.dockShadow,
         ),
-        backgroundColor: AppColors.statusGreen,
-        duration: const Duration(milliseconds: 2500),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.mutedLight,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Shop or Signboard Photo',
+                style: AppTextStyles.cardTitle,
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(
+                  Icons.camera_alt_rounded,
+                  color: AppColors.tacticalOrange,
+                ),
+                title: Text(
+                  'Take Photo with Camera',
+                  style: AppTextStyles.itemTitle,
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.photo_library_rounded,
+                  color: AppColors.tacticalOrange,
+                ),
+                title: Text(
+                  'Choose from Gallery',
+                  style: AppTextStyles.itemTitle,
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _useCurrentLocation() async {
+    try {
+      final locService =
+          widget.locationService ?? const GeolocatorLocationService();
+      final hasPerm = await locService.checkPermission();
+      if (!hasPerm) {
+        final granted = await locService.requestPermission();
+        if (!granted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Location permission is required to save current position'),
+                backgroundColor: AppColors.darkCharcoal,
+              ),
+            );
+          }
+          return;
+        }
+      }
+      final pos = await locService.getCurrentPosition();
+      if (pos != null && mounted) {
+        setState(() {
+          _latitude = pos.latitude;
+          _longitude = pos.longitude;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Current location saved as shop location'),
+            backgroundColor: AppColors.statusGreen,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not get position: $e'),
+            backgroundColor: AppColors.alertRed,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _chooseOnMap() async {
+    LatLng center = const LatLng(31.5204, 74.3587);
+    if (_latitude != null && _longitude != null) {
+      center = LatLng(_latitude!, _longitude!);
+    } else {
+      try {
+        final locService =
+            widget.locationService ?? const GeolocatorLocationService();
+        final pos = await locService.getCurrentPosition();
+        if (pos != null) {
+          center = pos.toLatLng();
+        }
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    final LatLng? picked = await showDialog<LatLng>(
+      context: context,
+      builder: (ctx) => MapPinPickerModal(
+        initialCenter: center,
+        initialPin: _latitude != null && _longitude != null
+            ? LatLng(_latitude!, _longitude!)
+            : null,
+        tileProvider: widget.tileProvider,
       ),
     );
 
-    Navigator.of(context).pop(newMechanic);
+    if (picked != null && mounted) {
+      setState(() {
+        _latitude = picked.latitude;
+        _longitude = picked.longitude;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Map pin location saved as shop location'),
+          backgroundColor: AppColors.statusGreen,
+        ),
+      );
+    }
+  }
+
+  void _saveMechanic() {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      setState(() {
+        _nameError = true;
+      });
+      return;
+    }
+
+    // Opening hours validation:
+    // If days are chosen, both times are required unless Open 24 hours is on.
+    // Closing earlier than opening is allowed (overnight). Equal times are invalid.
+    // Leaving the whole section empty is fine.
+    if (_openDays.isNotEmpty) {
+      if (!_open24Hours) {
+        if (_openMinutes == null || _closeMinutes == null) {
+          setState(() {
+            _hoursError = 'Opening and closing times are required';
+          });
+          return;
+        }
+        if (_openMinutes == _closeMinutes) {
+          setState(() {
+            _hoursError = 'Opening and closing times cannot be identical';
+          });
+          return;
+        }
+      }
+    } else {
+      if (_open24Hours || _openMinutes != null || _closeMinutes != null) {
+        setState(() {
+          _hoursError = 'Please select at least one open day';
+        });
+        return;
+      }
+    }
+
+    final phone = _phoneController.text.trim();
+    if (phone.isNotEmpty) {
+      final digitsOnly = phone.replaceAll(RegExp(r'\D'), '');
+      if (digitsOnly.length < 5 || !RegExp(r'^[+0-9\s\-()]{5,20}$').hasMatch(phone)) {
+        setState(() {
+          _phoneError = 'Please enter a valid phone number (at least 5 digits)';
+        });
+        return;
+      }
+    }
+
+    final address = _addressController.text.trim();
+    final speciality = _specialityController.text.trim();
+    final notes = _notesController.text.trim();
+
+    final existing = widget.mechanic;
+    final id = existing?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+
+    final List<String> tags1;
+    if (speciality.isNotEmpty) {
+      tags1 = speciality
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } else {
+      tags1 = existing?.tags1 ?? const ['General Repair'];
+    }
+
+    final List<String> tags2;
+    if (address.isNotEmpty) {
+      tags2 = [address];
+    } else {
+      tags2 = existing?.tags2 ?? const ['Local Area'];
+    }
+
+    final newMech = Mechanic(
+      id: id,
+      name: name,
+      distance: null,
+      latitude: _latitude,
+      longitude: _longitude,
+      durationOrLocation: address.isNotEmpty
+          ? address
+          : (existing?.durationOrLocation ?? ''),
+      badgeType: BadgeType.verified,
+      badgeLabel: 'Added by you',
+      beaconStatus: '',
+      beaconColor: AppColors.statusGreen,
+      categoryTitle1: 'SPECIALTIES',
+      tags1: tags1,
+      categoryTitle2: 'LOCATION',
+      tags2: tags2,
+      rating: 0.0,
+      reviewCount: 0,
+      openStatus: '',
+      phoneNumber: phone.isNotEmpty ? phone : null,
+      address: address.isNotEmpty ? address : null,
+      notes: notes.isNotEmpty ? notes : null,
+      photoPath: _photoPath,
+      openDays: _openDays,
+      openMinutes: _open24Hours ? null : _openMinutes,
+      closeMinutes: _open24Hours ? null : _closeMinutes,
+      open24Hours: _open24Hours,
+    );
+
+    if (_isEditing) {
+      MechanicController.instance.updateMechanic(newMech);
+    } else {
+      MechanicController.instance.addMechanic(newMech);
+    }
+
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop(newMech);
+    }
   }
 
   @override
@@ -178,90 +421,277 @@ class _AddMechanicScreenState extends State<AddMechanicScreen> {
         bottom: false,
         child: Stack(
           children: [
-            // Scrollable Content
-            SingleChildScrollView(
-              padding: const EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 8,
-                bottom: 120, // Space for bottom nav
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Custom App Bar Row
-                  _buildCustomAppBar(),
+            Column(
+              children: [
+                CampAppBar(
+                  leading: CampAppBarLeading.back,
+                  onLeadingPressed: () => Navigator.of(context).pop(),
+                  titleText: _isEditing ? 'Edit Mechanic' : 'Add Mechanic',
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    // Reserve space for the floating nav dock below
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 120),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Header hint
+                        Text(
+                          'Know a mechanic or emergency pitstop? Add them so you and other riders can find reliable support offline.',
+                          style: AppTextStyles.bodySecondary.copyWith(
+                            fontSize: 13,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
 
-                  const SizedBox(height: 16),
+                        // Shop name (required)
+                        LabeledTextField(
+                          label: 'Shop / Mechanic Name',
+                          controller: _nameController,
+                          placeholder: 'e.g. Peak Moto & Adventure Rig Prep',
+                          isError: _nameError,
+                          errorText: _nameError ? 'Shop name is required' : null,
+                          rightLabelWidget: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF0DB),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              'REQUIRED',
+                              style: GoogleFonts.manrope(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.tacticalOrangeDark,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                          onChanged: (_) {
+                            if (_nameError) {
+                              setState(() => _nameError = false);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
 
-                  // Header Title & Remote Contributor Badge
-                  _buildHeaderTitle(),
+                        // Phone
+                        LabeledTextField(
+                          label: 'Phone Number (optional)',
+                          controller: _phoneController,
+                          placeholder: 'e.g. +92 300 1234567',
+                          keyboardType: TextInputType.phone,
+                          trailingIcon: Icons.phone_outlined,
+                          isError: _phoneError != null,
+                          errorText: _phoneError,
+                          onChanged: (_) {
+                            if (_phoneError != null) {
+                              setState(() => _phoneError = null);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
 
-                  const SizedBox(height: 20),
+                        // Address
+                        LabeledTextField(
+                          label: 'Address / Location',
+                          controller: _addressController,
+                          placeholder: 'e.g. 42 Timberline Rd, Babusar Valley',
+                          trailingIcon: Icons.location_on_outlined,
+                        ),
+                        const SizedBox(height: 16),
 
-                  // Card 1: Shop or Mechanic Name (REQUIRED)
-                  _buildShopNameCard(),
+                        // Shop Location (GPS) Section
+                        Text(
+                          'SHOP LOCATION',
+                          style: AppTextStyles.overline.copyWith(
+                            color: AppColors.mutedText,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
 
-                  const SizedBox(height: 16),
+                        // Location status card
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: AppColors.clayDark,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: _latitude != null
+                                  ? AppColors.statusGreen.withValues(alpha: 0.4)
+                                  : Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _latitude != null
+                                    ? Icons.check_circle_rounded
+                                    : Icons.location_off_outlined,
+                                color: _latitude != null
+                                    ? AppColors.statusGreen
+                                    : AppColors.mutedText,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _latitude != null
+                                          ? 'Location saved'
+                                          : 'No location yet',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: _latitude != null
+                                            ? Colors.white
+                                            : AppColors.mutedText,
+                                      ),
+                                    ),
+                                    if (_latitude != null && _longitude != null)
+                                      Text(
+                                        '${_latitude!.toStringAsFixed(4)}°, ${_longitude!.toStringAsFixed(4)}°',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: AppColors.mutedText,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              if (_latitude != null)
+                                TextButton(
+                                  key: const ValueKey('change_location_button'),
+                                  onPressed: _chooseOnMap,
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  child: const Text(
+                                    'Change',
+                                    style: TextStyle(
+                                      color: AppColors.tacticalOrange,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
 
-                  // Card 2: Location & Coordinates (Required)
-                  _buildLocationCard(),
+                        // Location Action Buttons: "Use my current location" & "Choose on map"
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                key: const ValueKey('use_current_location_button'),
+                                onPressed: _useCurrentLocation,
+                                icon: const Icon(Icons.my_location_rounded, size: 16),
+                                label: const Text(
+                                  'Use my current location',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.tacticalOrange,
+                                  side: BorderSide(
+                                    color: AppColors.tacticalOrange.withValues(alpha: 0.5),
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                key: const ValueKey('choose_on_map_button'),
+                                onPressed: _chooseOnMap,
+                                icon: const Icon(Icons.map_rounded, size: 16),
+                                label: const Text(
+                                  'Choose on map',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                  side: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
 
-                  const SizedBox(height: 16),
+                        // Speciality (optional)
+                        LabeledTextField(
+                          label: 'Speciality (optional)',
+                          controller: _specialityController,
+                          placeholder: 'e.g. Engine rebuild, tire plugs, carb jetting',
+                          trailingIcon: Icons.build_outlined,
+                          helperText: 'Separate multiple skills with commas',
+                        ),
+                        const SizedBox(height: 16),
 
-                  // Card 3: Phone Number (OPTIONAL)
-                  _buildPhoneCard(),
+                        // Notes (optional)
+                        LabeledTextField(
+                          label: 'Rider Notes (optional)',
+                          controller: _notesController,
+                          placeholder: 'e.g. Has 220V arc welder, stocked tubes & spark plugs',
+                          maxLines: 3,
+                        ),
+                        const SizedBox(height: 20),
 
-                  const SizedBox(height: 16),
+                        // Opening Hours Section (optional)
+                        _buildOpeningHoursSection(),
+                        const SizedBox(height: 20),
 
-                  // Card 4: Brands Serviced (Multi-Select)
-                  _buildBrandsCard(),
+                        // Photo Section
+                        _buildPhotoSection(),
+                        const SizedBox(height: 28),
 
-                  const SizedBox(height: 16),
-
-                  // Card 5: Specialty & Tools (Multi-Select)
-                  _buildSpecialtyCard(),
-
-                  const SizedBox(height: 16),
-
-                  // Card 6: Shop or Signboard Photo (OPTIONAL)
-                  _buildPhotoCard(),
-
-                  const SizedBox(height: 16),
-
-                  // Card 7: Rider Notes & Landmarks (OPTIONAL)
-                  _buildNotesCard(),
-
-                  const SizedBox(height: 16),
-
-                  // Card 8: Pending Verification Information Box
-                  _buildPendingVerificationNotice(),
-
-                  const SizedBox(height: 24),
-
-                  // Submit Mechanic Button
-                  _buildSubmitButton(),
-
-                  const SizedBox(height: 16),
-                ],
-              ),
+                        // Save Button
+                        PrimaryButton(
+                          label: _isEditing ? 'Save Changes' : 'Save Mechanic',
+                          icon: Icons.check_rounded,
+                          isFullWidth: true,
+                          onTap: _saveMechanic,
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
 
-            // Floating Bottom Navigation Dock (Centered, bottom: 24)
-            Positioned(
+            // Floating Bottom Nav Dock — CampBottomNav hides itself when keyboard is open
+            const Positioned(
               left: 0,
               right: 0,
               bottom: 24,
               child: Center(
-                child: TacticalBottomDockWidget(
-                  selectedIndex: 3,
-                  onIndexChanged: (index) {
-                    if (index == 3) {
-                      Navigator.of(context).pop();
-                    } else {
-                      CampBottomNav.navigateToTab(context, index, currentIndex: 3);
-                    }
-                  },
+                child: CampBottomNav(
+                  selected: CampTab.mechanics,
                 ),
               ),
             ),
@@ -271,824 +701,169 @@ class _AddMechanicScreenState extends State<AddMechanicScreen> {
     );
   }
 
-  // --- Top App Bar ---
-  Widget _buildCustomAppBar() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        // Circular Back Button with 3D Skeuomorphic Depth
-        GestureDetector(
-          onTap: () => Navigator.of(context).pop(),
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: AppColors.clay,
-              border: Border.all(color: AppColors.clayDark, width: 1.2),
-              boxShadow: AppColors.skeuRaisedSmall,
-            ),
-            child: const Center(
-              child: Icon(
-                Icons.arrow_back_rounded,
-                size: 20,
-                color: AppColors.darkCharcoal,
-              ),
-            ),
-          ),
-        ),
+  Widget _buildPhotoSection() {
+    final photo = _photoPath;
+    final file = photo != null ? File(photo) : null;
+    final hasPhoto = file != null && file.existsSync();
 
-        // CAMP Brand Title with Orange Dot
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'CAMP',
-              style: AppTextStyles.title.copyWith(
-                fontSize: 18,
-                letterSpacing: 1.2,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Container(
-              width: 10,
-              height: 10,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.tacticalOrangeLight,
-              ),
-            ),
-          ],
-        ),
-
-        // PITSTOP Pill Badge with Tactile Relief
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: AppColors.clay,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.clayDark, width: 1.2),
-            boxShadow: AppColors.skeuRaisedSmall,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 7,
-                height: 7,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.statusGreen,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'PITSTOP',
-                style: AppTextStyles.overline.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.8,
-                  color: AppColors.charcoalLight,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  // --- Header Title Section ---
-  Widget _buildHeaderTitle() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(
-              'Add a Mechanic',
-              style: AppTextStyles.title.copyWith(
-                fontSize: 24,
-                letterSpacing: -0.5,
+              'Shop or Signboard Photo',
+              style: GoogleFonts.manrope(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.darkCharcoal,
               ),
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF0DB),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0x33F56500), width: 1),
-                boxShadow: AppColors.skeuRaisedSmall,
-              ),
-              child: Text(
-                'REMOTE CONTRIBUTOR',
-                style: AppTextStyles.overline.copyWith(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5,
-                  color: AppColors.tacticalOrangeDark,
-                ),
+            Text(
+              'OPTIONAL',
+              style: GoogleFonts.manrope(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedLight,
+                letterSpacing: 0.5,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Know a mechanic in a remote area? Add them so other riders can find reliable help on the trail.',
-          style: AppTextStyles.bodySecondary.copyWith(
-            fontSize: 13,
-            height: 1.35,
-          ),
-        ),
-      ],
-    );
-  }
+        const SizedBox(height: 8),
 
-  // Helper Card Wrapper with Skeuomorphic Dual-Shadow Lighting
-  Widget _buildCardContainer({required Widget child}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppColors.clay,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.clayDark, width: 1.2),
-        boxShadow: AppColors.skeuRaised,
-      ),
-      child: child,
-    );
-  }
-
-  // --- Card 1: Shop or Mechanic Name ---
-  Widget _buildShopNameCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.storefront_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'SHOP OR MECHANIC NAME',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'REQUIRED',
-                style: AppTextStyles.overline.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.tacticalOrange,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
+        if (hasPhoto)
           Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: AppColors.clayDark,
-              borderRadius: BorderRadius.circular(16),
+              color: AppColors.clay,
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(color: AppColors.clayDark, width: 1.2),
-              boxShadow: AppColors.skeuRecessed,
+              boxShadow: AppColors.skeuRaisedSmall,
             ),
-            child: TextField(
-              controller: _nameController,
-              style: AppTextStyles.body.copyWith(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: AppColors.darkCharcoal,
-              ),
-              decoration: InputDecoration(
-                hintText: 'e.g. Babusar Valley Moto Spares & Welding',
-                hintStyle: AppTextStyles.bodySecondary.copyWith(
-                  color: AppColors.mutedLight,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w400,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 2: Location & Coordinates ---
-  Widget _buildLocationCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.near_me_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'LOCATION & COORDINATES',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'Required',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.tacticalOrange,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // Primary Orange Tactile Push-Button
-          GestureDetector(
-            onTap: _onGpsTap,
-            child: Container(
-              height: 60,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                gradient: _orangeGradient,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: AppColors.orangeGlow,
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.25),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        width: 1,
-                      ),
-                    ),
-                    child: const Center(
-                      child: Icon(
-                        Icons.location_on_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Use Current GPS\nLocation',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        height: 1.2,
-                      ),
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.tacticalOrangeDark.withValues(alpha: 0.75),
-                      borderRadius: BorderRadius.circular(10),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          offset: const Offset(0, 1),
-                          blurRadius: 2,
+            child: Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Image.file(
+                    file,
+                    width: double.infinity,
+                    height: 160,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      height: 120,
+                      color: AppColors.clayDark,
+                      child: const Center(
+                        child: Icon(
+                          Icons.broken_image_rounded,
+                          color: AppColors.mutedLight,
+                          size: 32,
                         ),
-                      ],
-                    ),
-                    child: Text(
-                      _gpsCoordinates,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        height: 1.25,
-                        letterSpacing: 0.2,
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Divider with Center Text
-          Row(
-            children: [
-              const Expanded(
-                child: Divider(color: AppColors.clayDark, thickness: 1),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text(
-                  'OR ENTER MANUALLY',
-                  style: AppTextStyles.overline.copyWith(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.mutedLight,
-                    letterSpacing: 0.8,
-                  ),
                 ),
-              ),
-              const Expanded(
-                child: Divider(color: AppColors.clayDark, thickness: 1),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 12),
-
-          // Manual Location Field with Recessed Inset
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.clayDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.clayDark, width: 1.2),
-              boxShadow: AppColors.skeuRecessed,
-            ),
-            child: TextField(
-              controller: _locationController,
-              style: AppTextStyles.body.copyWith(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.darkCharcoal,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Village, pass, valley, or nearby milestone (e.g. Kagha',
-                hintStyle: AppTextStyles.bodySecondary.copyWith(
-                  color: AppColors.mutedLight,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w400,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 3: Phone Number ---
-  Widget _buildPhoneCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.phone_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'PHONE NUMBER',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'OPTIONAL',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.mutedLight,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              // +92 Country Code Pill Box with Tactile Relief
-              Container(
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.clayDark,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.clayDark, width: 1.2),
-                  boxShadow: AppColors.skeuRaisedSmall,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    const Icon(
-                      Icons.phone_in_talk_rounded,
-                      size: 15,
-                      color: AppColors.tacticalOrange,
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _showImageSourcePicker,
+                        icon: const Icon(
+                          Icons.photo_camera_rounded,
+                          size: 16,
+                          color: AppColors.tacticalOrange,
+                        ),
+                        label: Text(
+                          'Replace Photo',
+                          style: GoogleFonts.manrope(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.darkCharcoal,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          side: const BorderSide(color: AppColors.clayDark, width: 1.2),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          backgroundColor: AppColors.clay,
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '+92',
-                      style: AppTextStyles.body.copyWith(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                        color: AppColors.charcoalLight,
+                    const SizedBox(width: 10),
+                    OutlinedButton.icon(
+                      onPressed: () => setState(() => _photoPath = null),
+                      icon: const Icon(
+                        Icons.delete_outline_rounded,
+                        size: 16,
+                        color: AppColors.alertRed,
+                      ),
+                      label: Text(
+                        'Remove',
+                        style: GoogleFonts.manrope(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.alertRed,
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
+                        side: BorderSide(
+                          color: AppColors.alertRed.withValues(alpha: 0.3),
+                          width: 1.2,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        backgroundColor: AppColors.alertRedBg,
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 10),
-              // Phone Input Field with Inset Trough
-              Expanded(
-                child: Container(
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: AppColors.clayDark,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.clayDark, width: 1.2),
-                    boxShadow: AppColors.skeuRecessed,
-                  ),
-                  child: TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    style: AppTextStyles.body.copyWith(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.darkCharcoal,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: '300  1234567  /  Satellite Rad',
-                      hintStyle: AppTextStyles.bodySecondary.copyWith(
-                        color: AppColors.mutedLight,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w400,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      border: InputBorder.none,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 4: Brands Serviced ---
-  Widget _buildBrandsCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.two_wheeler_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'BRANDS SERVICED',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'Select all that apply',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.mutedLight,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 10,
-            children: _allBrands.map((brand) {
-              final isSelected = _selectedBrands.contains(brand);
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    if (isSelected) {
-                      _selectedBrands.remove(brand);
-                    } else {
-                      _selectedBrands.add(brand);
-                    }
-                  });
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? const Color(0xFFFFF0DB)
-                        : AppColors.clayDark,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: isSelected
-                          ? AppColors.tacticalOrangeDark
-                          : AppColors.clayDark,
-                      width: 1.3,
-                    ),
-                    boxShadow: isSelected
-                        ? AppColors.orangeGlow
-                        : AppColors.skeuRaisedSmall,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isSelected ? Icons.check_rounded : Icons.add_rounded,
-                        size: 15,
-                        color: isSelected
-                            ? AppColors.tacticalOrangeDark
-                            : AppColors.mutedText,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        brand,
-                        style: AppTextStyles.caption.copyWith(
-                          fontSize: 12.5,
-                          fontWeight: isSelected
-                              ? FontWeight.w800
-                              : FontWeight.w600,
-                          color: isSelected
-                              ? AppColors.tacticalOrangeDark
-                              : AppColors.mutedText,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 5: Specialty & Tools ---
-  Widget _buildSpecialtyCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.build_rounded,
-                    size: 17,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'SPECIALTY & TOOLS',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'Tap to toggle',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.mutedLight,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 8,
-            runSpacing: 10,
-            children: _allSpecialties.map((specialty) {
-              final isSelected = _selectedSpecialties.contains(specialty);
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    if (isSelected) {
-                      _selectedSpecialties.remove(specialty);
-                    } else {
-                      _selectedSpecialties.add(specialty);
-                    }
-                  });
-                },
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? const Color(0xFFFFF0DB)
-                        : AppColors.clayDark,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: isSelected
-                          ? AppColors.tacticalOrangeDark
-                          : AppColors.clayDark,
-                      width: 1.3,
-                    ),
-                    boxShadow: isSelected
-                        ? AppColors.orangeGlow
-                        : AppColors.skeuRaisedSmall,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isSelected ? Icons.check_rounded : Icons.add_rounded,
-                        size: 15,
-                        color: isSelected
-                            ? AppColors.tacticalOrangeDark
-                            : AppColors.mutedText,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        specialty,
-                        style: AppTextStyles.caption.copyWith(
-                          fontSize: 12.5,
-                          fontWeight: isSelected
-                              ? FontWeight.w800
-                              : FontWeight.w600,
-                          color: isSelected
-                              ? AppColors.tacticalOrangeDark
-                              : AppColors.mutedText,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 6: Shop or Signboard Photo ---
-  Widget _buildPhotoCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.photo_camera_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'SHOP OR SIGNBOARD PHOTO',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                'OPTIONAL',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.mutedLight,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
+              ],
+            ),
+          )
+        else
           GestureDetector(
-            onTap: _onPhotoTap,
+            onTap: _showImageSourcePicker,
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
               decoration: BoxDecoration(
                 color: AppColors.clayDark,
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: AppColors.clayDark,
-                  width: 1.2,
-                ),
+                border: Border.all(color: AppColors.clayDark, width: 1.2),
                 boxShadow: AppColors.skeuRecessed,
               ),
               child: Column(
                 children: [
                   Container(
-                    width: 50,
-                    height: 50,
+                    width: 48,
+                    height: 48,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: AppColors.clay,
                       border: Border.all(color: AppColors.clayDark, width: 1),
                       boxShadow: AppColors.skeuRaisedSmall,
                     ),
-                    child: Center(
+                    child: const Center(
                       child: Icon(
-                        _uploadedPhotoName != null
-                            ? Icons.check_circle_rounded
-                            : Icons.photo_camera_outlined,
-                        color: _uploadedPhotoName != null
-                            ? AppColors.statusGreen
-                            : AppColors.tacticalOrange,
-                        size: 24,
+                        Icons.photo_camera_rounded,
+                        color: AppColors.tacticalOrange,
+                        size: 22,
                       ),
                     ),
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    _uploadedPhotoName != null
-                        ? _uploadedPhotoName!
-                        : 'Take photo or upload signboard',
+                    'Take photo or choose from gallery',
                     style: AppTextStyles.body.copyWith(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
@@ -1097,7 +872,7 @@ class _AddMechanicScreenState extends State<AddMechanicScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Helps passing riders recognize the roadside shack or workshop',
+                    'Helps passing riders recognize the roadside workshop or signboard',
                     textAlign: TextAlign.center,
                     style: AppTextStyles.caption.copyWith(
                       fontSize: 11,
@@ -1108,180 +883,420 @@ class _AddMechanicScreenState extends State<AddMechanicScreen> {
               ),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 
-  // --- Card 7: Rider Notes & Landmarks ---
-  Widget _buildNotesCard() {
-    return _buildCardContainer(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.notes_rounded,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'RIDER NOTES & LANDMARKS',
-                    style: AppTextStyles.overline.copyWith(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.charcoalLight,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
+  Widget _buildOpeningHoursSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Opening Hours',
+              style: GoogleFonts.manrope(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.darkCharcoal,
               ),
-              Text(
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.clayDark,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
                 'OPTIONAL',
-                style: AppTextStyles.caption.copyWith(
-                  fontSize: 11,
+                style: GoogleFonts.manrope(
+                  fontSize: 9.5,
                   fontWeight: FontWeight.w700,
                   color: AppColors.mutedLight,
                   letterSpacing: 0.5,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.clayDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.clayDark, width: 1.2),
-              boxShadow: AppColors.skeuRecessed,
-            ),
-            child: TextField(
-              controller: _notesController,
-              maxLines: 3,
-              style: AppTextStyles.body.copyWith(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.darkCharcoal,
-              ),
-              decoration: InputDecoration(
-                hintText:
-                    'e.g. Next to wooden bridge crossing, has 220V arc welder and stocked spark plugs',
-                hintStyle: AppTextStyles.bodySecondary.copyWith(
-                  color: AppColors.mutedLight,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w400,
-                  height: 1.35,
-                ),
-                contentPadding: const EdgeInsets.all(14),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Card 8: Pending Verification Information Box ---
-  Widget _buildPendingVerificationNotice() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFFDE68A), width: 1.2),
-        boxShadow: AppColors.skeuRaisedSmall,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 2),
-            child: const Icon(
-              Icons.access_time_rounded,
-              color: Color(0xFFD97706),
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: RichText(
-              text: const TextSpan(
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Color(0xFF475569),
-                  height: 1.45,
-                ),
-                children: [
-                  TextSpan(
-                    text: 'Pending Verification: ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.darkCharcoal,
-                    ),
-                  ),
-                  TextSpan(
-                    text: 'Submitted mechanics are marked ',
-                  ),
-                  TextSpan(
-                    text: '"Pending Verification" ',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFFD97706),
-                    ),
-                  ),
-                  TextSpan(
-                    text:
-                        'until reviewed and corroborated by the CAMP rider network.',
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Submit Mechanic Button ---
-  Widget _buildSubmitButton() {
-    return GestureDetector(
-      onTap: _submitMechanic,
-      child: Container(
-        width: double.infinity,
-        height: 54,
-        decoration: BoxDecoration(
-          gradient: _orangeGradient,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: AppColors.orangeGlow,
-        ),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.handyman_rounded,
-              color: Colors.white,
-              size: 20,
-            ),
-            SizedBox(width: 8),
-            Text(
-              'Submit Mechanic',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.3,
-              ),
             ),
           ],
         ),
+        const SizedBox(height: 8),
+
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.clay,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: _hoursError != null ? AppColors.alertRed : AppColors.clayDark,
+              width: 1.2,
+            ),
+            boxShadow: AppColors.skeuRaisedSmall,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Presets Row
+              Text(
+                'QUICK PRESETS',
+                style: GoogleFonts.manrope(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.mutedLight,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _buildPresetChip('Mon to Fri', const [1, 2, 3, 4, 5]),
+                  _buildPresetChip('Mon to Sat', const [1, 2, 3, 4, 5, 6]),
+                  _buildPresetChip('Every day', const [1, 2, 3, 4, 5, 6, 7]),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Seven Day Chips (Mon to Sun)
+              Text(
+                'SELECT OPEN DAYS',
+                style: GoogleFonts.manrope(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.mutedLight,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildDayChip('M', 1),
+                  _buildDayChip('T', 2),
+                  _buildDayChip('W', 3),
+                  _buildDayChip('T', 4),
+                  _buildDayChip('F', 5),
+                  _buildDayChip('S', 6),
+                  _buildDayChip('S', 7),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Open 24 Hours Switch
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.clayDark,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.all_inclusive_rounded,
+                          size: 18,
+                          color: AppColors.tacticalOrange,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Open 24 hours',
+                          style: GoogleFonts.manrope(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.darkCharcoal,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Switch.adaptive(
+                      value: _open24Hours,
+                      activeTrackColor: AppColors.tacticalOrange,
+                      onChanged: (val) {
+                        setState(() {
+                          _open24Hours = val;
+                          _hoursError = null;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              // Time Pickers (hidden when Open 24 hours is on)
+              if (!_open24Hours) ...[
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildTimePickerField(
+                        label: 'Opens at',
+                        minutes: _openMinutes,
+                        onTap: () => _pickTime(isOpening: true),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildTimePickerField(
+                        label: 'Closes at',
+                        minutes: _closeMinutes,
+                        onTap: () => _pickTime(isOpening: false),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
+              // Validation Error Message
+              if (_hoursError != null) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.error_outline_rounded,
+                      size: 14,
+                      color: AppColors.alertRed,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _hoursError!,
+                        style: GoogleFonts.manrope(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.alertRed,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
+              // Clear Button
+              if (_openDays.isNotEmpty ||
+                  _openMinutes != null ||
+                  _closeMinutes != null ||
+                  _open24Hours) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _openDays.clear();
+                        _openMinutes = null;
+                        _closeMinutes = null;
+                        _open24Hours = false;
+                        _hoursError = null;
+                      });
+                    },
+                    icon: const Icon(
+                      Icons.clear_rounded,
+                      size: 14,
+                      color: AppColors.mutedLight,
+                    ),
+                    label: Text(
+                      'Clear hours',
+                      style: GoogleFonts.manrope(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.mutedLight,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPresetChip(String label, List<int> days) {
+    final isSelected = _daysMatch(_openDays, days);
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _openDays.clear();
+          } else {
+            _openDays = List<int>.from(days);
+          }
+          _hoursError = null;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFFF0DB) : AppColors.clayDark,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppColors.tacticalOrange : AppColors.clayDark,
+            width: 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.manrope(
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected ? AppColors.tacticalOrangeDark : AppColors.charcoalLight,
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _buildDayChip(String label, int day) {
+    final isSelected = _openDays.contains(day);
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _openDays.remove(day);
+          } else {
+            _openDays.add(day);
+            _openDays.sort();
+          }
+          _hoursError = null;
+        });
+      },
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.tacticalOrange : AppColors.clayDark,
+          shape: BoxShape.circle,
+          boxShadow: isSelected ? AppColors.orangeGlow : AppColors.skeuRaisedSmall,
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: GoogleFonts.manrope(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: isSelected ? Colors.white : AppColors.darkCharcoal,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimePickerField({
+    required String label,
+    required int? minutes,
+    required VoidCallback onTap,
+  }) {
+    final hasValue = minutes != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.manrope(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: AppColors.charcoalLight,
+          ),
+        ),
+        const SizedBox(height: 6),
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            decoration: BoxDecoration(
+              color: AppColors.clay,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: _hoursError != null && !hasValue
+                    ? AppColors.alertRed
+                    : AppColors.clayDark,
+                width: 1.2,
+              ),
+              boxShadow: AppColors.skeuRecessed,
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.access_time_rounded,
+                  size: 16,
+                  color: AppColors.tacticalOrange,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    hasValue ? formatMinutes(minutes) : 'Select time',
+                    style: GoogleFonts.manrope(
+                      fontSize: 12.5,
+                      fontWeight: hasValue ? FontWeight.w700 : FontWeight.w500,
+                      color: hasValue ? AppColors.darkCharcoal : AppColors.mutedLight,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickTime({required bool isOpening}) async {
+    final currentMinutes = isOpening ? _openMinutes : _closeMinutes;
+    final initialTime = currentMinutes != null
+        ? TimeOfDay(hour: currentMinutes ~/ 60, minute: currentMinutes % 60)
+        : (isOpening
+            ? const TimeOfDay(hour: 9, minute: 0)
+            : const TimeOfDay(hour: 18, minute: 0));
+
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initialTime,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppColors.tacticalOrange,
+              onPrimary: Colors.white,
+              surface: AppColors.clay,
+              onSurface: AppColors.darkCharcoal,
+            ),
+            dialogTheme: const DialogThemeData(
+              backgroundColor: AppColors.clay,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null) {
+      setState(() {
+        final mins = picked.hour * 60 + picked.minute;
+        if (isOpening) {
+          _openMinutes = mins;
+        } else {
+          _closeMinutes = mins;
+        }
+        _hoursError = null;
+      });
+    }
+  }
+
+  bool _daysMatch(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    final sortedA = List<int>.from(a)..sort();
+    final sortedB = List<int>.from(b)..sort();
+    for (var i = 0; i < sortedA.length; i++) {
+      if (sortedA[i] != sortedB[i]) return false;
+    }
+    return true;
   }
 }

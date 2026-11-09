@@ -4,12 +4,16 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/utils/currency_formatter.dart';
 import '../../../../core/widgets/widgets.dart';
+import '../../../garage/controllers/active_bike_controller.dart';
 import '../../domain/maintenance_item_model.dart';
 
-/// Screen to log or register a new motorcycle maintenance inspection item
+/// Screen to log or edit a motorcycle maintenance inspection item
 class AddMaintenanceItemScreen extends StatefulWidget {
-  const AddMaintenanceItemScreen({super.key});
+  const AddMaintenanceItemScreen({super.key, this.initialItem});
+
+  final MaintenanceItem? initialItem;
 
   @override
   State<AddMaintenanceItemScreen> createState() =>
@@ -17,11 +21,11 @@ class AddMaintenanceItemScreen extends StatefulWidget {
 }
 
 class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
-  final _nameCtrl = TextEditingController(text: 'Fork Seals & Dust Boots');
-  final _dueValueCtrl = TextEditingController(text: '12,500 mi');
-  final _notesCtrl = TextEditingController(
-    text: 'WP XPLOR 48mm, inspect for seal weeping',
-  );
+  final _nameCtrl = TextEditingController();
+  final _dueValueCtrl = TextEditingController();
+  final _notesCtrl = TextEditingController();
+  final _costCtrl = TextEditingController();
+  final _mechanicCtrl = TextEditingController();
 
   String _selectedCategory = 'Suspension';
   static const List<String> _categoryOptions = [
@@ -37,12 +41,43 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
   MaintenanceStatus _selectedStatus = MaintenanceStatus.dueSoon;
   int _dueTypeIndex = 0; // 0=By Mileage, 1=By Date
   int _trackingModeIndex = 1; // 0=Auto Telemetry, 1=Manual Entry (default: Manual)
+  String? _selectedBikeId;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialItem != null) {
+      final item = widget.initialItem!;
+      _selectedBikeId = item.bikeId;
+      _nameCtrl.text = item.name;
+      _selectedCategory = item.category;
+      _selectedStatus = item.status;
+      _trackingModeIndex =
+          item.trackingMode == MaintenanceTrackingMode.auto ? 0 : 1;
+      if (item.dueMileage != null && item.dueMileage!.isNotEmpty) {
+        _dueTypeIndex = 0;
+        _dueValueCtrl.text = item.dueMileage!;
+      } else if (item.dueDate != null && item.dueDate!.isNotEmpty) {
+        _dueTypeIndex = 1;
+        _dueValueCtrl.text = item.dueDate!;
+      }
+      _notesCtrl.text = item.notes ?? '';
+      if (item.cost != null) {
+        _costCtrl.text = item.cost!.toStringAsFixed(0);
+      }
+      _mechanicCtrl.text = item.mechanicName ?? '';
+    } else {
+      _selectedBikeId = ActiveBikeController.instance.activeBike?.id;
+    }
+  }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
     _dueValueCtrl.dispose();
     _notesCtrl.dispose();
+    _costCtrl.dispose();
+    _mechanicCtrl.dispose();
     super.dispose();
   }
 
@@ -58,27 +93,108 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
       return;
     }
 
-    final newItem = MaintenanceItem(
-      id: 'maint-${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      category: _selectedCategory,
-      status: _selectedStatus,
-      trackingMode: _trackingModeIndex == 0
-          ? MaintenanceTrackingMode.auto
-          : MaintenanceTrackingMode.manual,
-      dueMileage: _dueTypeIndex == 0 ? _dueValueCtrl.text.trim() : null,
-      dueDate: _dueTypeIndex == 1 ? _dueValueCtrl.text.trim() : null,
-      notes: _notesCtrl.text.trim(),
-      actionLabel: _selectedStatus == MaintenanceStatus.ok ? null : 'View Guide',
-      statusValueDisplay: _selectedStatus == MaintenanceStatus.ok ? 'OK' : '\$65',
-      subtitle: _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
-      conditionNote: _selectedStatus == MaintenanceStatus.ok
-          ? 'Good • Ready for trail'
-          : 'Due soon • ${_dueValueCtrl.text.trim()}',
-      icon: _getCategoryIcon(_selectedCategory),
-    );
+    final double? parsedCost = parsePkr(_costCtrl.text);
+    final String? mechanicName =
+        _mechanicCtrl.text.trim().isNotEmpty ? _mechanicCtrl.text.trim() : null;
 
-    Navigator.of(context).pop(newItem);
+    final String? statusDisplay = _selectedStatus == MaintenanceStatus.ok
+        ? 'OK'
+        : (parsedCost != null && parsedCost > 0 ? formatPkr(parsedCost) : null);
+
+    String conditionNote;
+    if (_selectedStatus == MaintenanceStatus.ok) {
+      conditionNote = 'Good • Ready for trail';
+    } else {
+      final rawVal = _dueValueCtrl.text.trim();
+      if (rawVal.isNotEmpty) {
+        final cleanNum = int.tryParse(rawVal.replaceAll(',', '').replaceAll(' ', ''));
+        if (_dueTypeIndex == 0) {
+          // By Mileage
+          if (cleanNum != null) {
+            conditionNote = 'Due soon • in ${_formatThousands(cleanNum)} km';
+          } else {
+            final kmMatch = RegExp(r'^(?:in\s+)?(\d[\d,]*)\s*km$', caseSensitive: false).firstMatch(rawVal);
+            if (kmMatch != null) {
+              final n = int.tryParse(kmMatch.group(1)!.replaceAll(',', ''));
+              conditionNote = 'Due soon • in ${_formatThousands(n ?? 0)} km';
+            } else {
+              conditionNote = 'Due soon • $rawVal';
+            }
+          }
+        } else {
+          // By Date
+          if (cleanNum != null) {
+            conditionNote = 'Due soon • in ${_formatThousands(cleanNum)} days';
+          } else {
+            final daysMatch = RegExp(r'^(?:in\s+)?(\d[\d,]*)\s*days?$', caseSensitive: false).firstMatch(rawVal);
+            if (daysMatch != null) {
+              final n = int.tryParse(daysMatch.group(1)!.replaceAll(',', ''));
+              conditionNote = 'Due soon • in ${_formatThousands(n ?? 0)} days';
+            } else {
+              conditionNote = 'Due soon • $rawVal';
+            }
+          }
+        }
+      } else {
+        conditionNote = _selectedStatus == MaintenanceStatus.dueSoon
+            ? 'Due soon'
+            : 'Maintenance due';
+      }
+    }
+
+    final item = widget.initialItem != null
+        ? widget.initialItem!.copyWith(
+            name: name,
+            category: _selectedCategory,
+            status: _selectedStatus,
+            bikeId: _selectedBikeId,
+            trackingMode: _trackingModeIndex == 0
+                ? MaintenanceTrackingMode.auto
+                : MaintenanceTrackingMode.manual,
+            dueMileage: _dueTypeIndex == 0 ? _dueValueCtrl.text.trim() : null,
+            dueDate: _dueTypeIndex == 1 ? _dueValueCtrl.text.trim() : null,
+            notes: _notesCtrl.text.trim(),
+            cost: parsedCost,
+            mechanicName: mechanicName,
+            actionLabel: null,
+            statusValueDisplay: statusDisplay,
+            subtitle: _notesCtrl.text.trim().isNotEmpty
+                ? _notesCtrl.text.trim()
+                : (mechanicName != null ? 'Serviced by $mechanicName' : null),
+            conditionNote: conditionNote,
+            icon: _getCategoryIcon(_selectedCategory),
+            updatedAt: DateTime.now().toUtc(),
+          )
+        : MaintenanceItem(
+            id: 'maint-${DateTime.now().millisecondsSinceEpoch}',
+            name: name,
+            category: _selectedCategory,
+            status: _selectedStatus,
+            bikeId: _selectedBikeId,
+            trackingMode: _trackingModeIndex == 0
+                ? MaintenanceTrackingMode.auto
+                : MaintenanceTrackingMode.manual,
+            dueMileage: _dueTypeIndex == 0 ? _dueValueCtrl.text.trim() : null,
+            dueDate: _dueTypeIndex == 1 ? _dueValueCtrl.text.trim() : null,
+            notes: _notesCtrl.text.trim(),
+            cost: parsedCost,
+            mechanicName: mechanicName,
+            actionLabel: null,
+            statusValueDisplay: statusDisplay,
+            subtitle: _notesCtrl.text.trim().isNotEmpty
+                ? _notesCtrl.text.trim()
+                : (mechanicName != null ? 'Serviced by $mechanicName' : null),
+            conditionNote: conditionNote,
+            icon: _getCategoryIcon(_selectedCategory),
+          );
+
+    Navigator.of(context).pop(item);
+  }
+
+  static String _formatThousands(int num) {
+    final str = num.toString();
+    final reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
+    return str.replaceAllMapped(reg, (Match m) => '${m[1]},');
   }
 
   IconData _getCategoryIcon(String cat) {
@@ -202,6 +318,29 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
 
                   const SizedBox(height: 18),
 
+                  // ── Bike Picker Dropdown ──────────────────────────────────
+                  LabeledDropdown<String?>(
+                    label: 'BIKE',
+                    value: _selectedBikeId,
+                    items: [
+                      null,
+                      ...ActiveBikeController.instance.bikes.map((b) => b.id),
+                      if (_selectedBikeId != null &&
+                          !ActiveBikeController.instance.bikes
+                              .any((b) => b.id == _selectedBikeId))
+                        _selectedBikeId,
+                    ],
+                    itemLabelBuilder: (id) {
+                      if (id == null) return 'No bike';
+                      final bike =
+                          ActiveBikeController.instance.getBikeById(id);
+                      return bike != null ? bike.name : 'Deleted bike';
+                    },
+                    onChanged: (val) => setState(() => _selectedBikeId = val),
+                  ),
+
+                  const SizedBox(height: 18),
+
                   // ── Category Dropdown ─────────────────────────────────────
                   LabeledDropdown<String>(
                     label: 'CATEGORY',
@@ -268,23 +407,39 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
                     options: const ['By Mileage', 'By Date'],
                     selectedIndex: _dueTypeIndex,
                     onChanged: (idx) {
-                      setState(() {
-                        _dueTypeIndex = idx;
-                        if (idx == 0 && _dueValueCtrl.text.isEmpty) {
-                          _dueValueCtrl.text = '12,500 mi';
-                        } else if (idx == 1 && _dueValueCtrl.text.contains('mi')) {
-                          _dueValueCtrl.text = 'Nov 15, 2026';
-                        }
-                      });
+                      setState(() => _dueTypeIndex = idx);
                     },
                   ),
                   const SizedBox(height: 8),
                   LabeledTextField(
-                    label: _dueTypeIndex == 0 ? 'ODOMETER DUE' : 'DATE DUE',
+                    label: _dueTypeIndex == 0 ? 'ODOMETER DUE (OPTIONAL)' : 'DATE DUE (OPTIONAL)',
                     controller: _dueValueCtrl,
+                    placeholder: _dueTypeIndex == 0 ? 'e.g. 5,000 km' : 'e.g. Nov 15, 2026',
                     trailingIcon: _dueTypeIndex == 0
                         ? Icons.speed_rounded
                         : Icons.calendar_today_rounded,
+                  ),
+
+                  const SizedBox(height: 18),
+
+                  // ── Cost (Optional, PKR) ──────────────────────────────────
+                  LabeledTextField(
+                    label: 'SERVICE / PART COST (OPTIONAL)',
+                    controller: _costCtrl,
+                    prefixText: 'Rs ',
+                    placeholder: '0',
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  ),
+
+                  const SizedBox(height: 18),
+
+                  // ── Workshop / Mechanic (Optional) ────────────────────────
+                  LabeledTextField(
+                    label: 'WORKSHOP / MECHANIC (OPTIONAL)',
+                    controller: _mechanicCtrl,
+                    placeholder: 'e.g. Peak Moto, DIY, Local Mechanic',
+                    trailingIcon: Icons.handyman_rounded,
                   ),
 
                   const SizedBox(height: 18),
@@ -293,6 +448,7 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
                   LabeledTextField(
                     label: 'NOTES (OPTIONAL)',
                     controller: _notesCtrl,
+                    placeholder: 'Additional service details, part numbers, or fluid specs',
                     maxLines: 3,
                   ),
 
@@ -302,7 +458,7 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
                   Text('TRACKING MODE', style: AppTextStyles.overline),
                   const SizedBox(height: 6),
                   SegmentedControl(
-                    options: const ['Auto Telemetry', 'Manual Entry'],
+                    options: const ['Auto Sync', 'Manual Entry'],
                     selectedIndex: _trackingModeIndex,
                     onChanged: (idx) {
                       setState(() => _trackingModeIndex = idx);
@@ -319,7 +475,7 @@ class _AddMaintenanceItemScreenState extends State<AddMaintenanceItemScreen> {
                       const SizedBox(width: 5),
                       Expanded(
                         child: Text(
-                          'Manual entries won\'t be affected by telemetry sync.',
+                          'Manual entries won\'t be affected by auto sync.',
                           style: AppTextStyles.caption.copyWith(
                             fontSize: 11,
                           ),

@@ -7,25 +7,6 @@ import '../../../../app/theme/app_theme.dart';
 import '../../domain/roadside_map_models.dart';
 
 class TopographicMapCanvas extends StatefulWidget {
-  final VoidCallback? onOpenGoogleMaps;
-  final VoidCallback? onToggle3D;
-  final VoidCallback? onToggleLayers;
-  final VoidCallback? onRecenter;
-  final String? selectedFilter;
-  final String userRole; // 'driver' or 'mechanic'
-  final LatLng? initialCenter;
-  final String? locationName;
-  final List<RoadsideMechanic> mechanics;
-  final List<StrandedIncident> strandedIncidents;
-  final List<RoadsideSupplyCache> supplyCaches;
-  final List<LatLng> activeRescueRoute;
-  final RoadsideMechanic? selectedMechanic;
-  final StrandedIncident? selectedIncident;
-  final ValueChanged<RoadsideMechanic>? onMechanicTapped;
-  final ValueChanged<StrandedIncident>? onIncidentTapped;
-  final ValueChanged<RoadsideSupplyCache>? onSupplyCacheTapped;
-  final ValueChanged<LatLng>? onLocationChanged;
-  final ValueChanged<String>? onLocationNameChanged;
 
   const TopographicMapCanvas({
     super.key,
@@ -49,6 +30,25 @@ class TopographicMapCanvas extends StatefulWidget {
     this.onLocationChanged,
     this.onLocationNameChanged,
   });
+  final VoidCallback? onOpenGoogleMaps;
+  final VoidCallback? onToggle3D;
+  final VoidCallback? onToggleLayers;
+  final VoidCallback? onRecenter;
+  final String? selectedFilter;
+  final String userRole; // 'driver' or 'mechanic'
+  final LatLng? initialCenter;
+  final String? locationName;
+  final List<RoadsideMechanic> mechanics;
+  final List<StrandedIncident> strandedIncidents;
+  final List<RoadsideSupplyCache> supplyCaches;
+  final List<LatLng> activeRescueRoute;
+  final RoadsideMechanic? selectedMechanic;
+  final StrandedIncident? selectedIncident;
+  final ValueChanged<RoadsideMechanic>? onMechanicTapped;
+  final ValueChanged<StrandedIncident>? onIncidentTapped;
+  final ValueChanged<RoadsideSupplyCache>? onSupplyCacheTapped;
+  final ValueChanged<LatLng>? onLocationChanged;
+  final ValueChanged<String>? onLocationNameChanged;
 
   @override
   State<TopographicMapCanvas> createState() => _TopographicMapCanvasState();
@@ -101,14 +101,25 @@ class _TopographicMapCanvasState extends State<TopographicMapCanvas>
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
+    );
 
     _pulseAnimation = Tween<double>(begin: 0.85, end: 1.35).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _centerCoord = widget.initialCenter ?? const LatLng(48.515, -120.690);
-    _locationTitle = widget.locationName ?? 'Cascade Alpine Loop';
+    _centerCoord = widget.initialCenter ?? const LatLng(31.5204, 74.3587);
+    _locationTitle = widget.locationName ?? '';
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Respect system-level "disable animations" setting (also set by tests).
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _pulseController.value = 1.0;
+    } else if (!_pulseController.isAnimating) {
+      _pulseController.repeat(reverse: true);
+    }
   }
 
   @override
@@ -790,53 +801,6 @@ class _TopographicMapCanvasState extends State<TopographicMapCanvas>
                     ),
                   ),
                 ],
-              ),
-            ),
-
-            // 4. Live Distress Beacon Status Pill (Bottom Left of map)
-            Positioned(
-              bottom: 124,
-              left: 14,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF181513).withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: Colors.white12,
-                    width: 1,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 8,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.statusGreen,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${widget.mechanics.length} RESCUE UNITS • ${widget.strandedIncidents.length} SOS ACTIVE',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.6,
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ),
 

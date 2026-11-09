@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/utils/currency_formatter.dart';
+
 /// Categories for expedition expenses
 enum ExpenseCategory {
   fuel,
@@ -91,50 +93,238 @@ class Expense {
     required this.title,
     required this.amount,
     required this.trackingMode,
+    this.bikeId,
+    this.maintenanceItemId,
+    this.litres,
+    this.pricePerLitre,
+    this.isFullTank = false,
     this.subtitle,
     this.note,
     this.dateRecorded,
     this.formattedDate,
+    this.createdAt,
+    this.updatedAt,
   });
 
+  factory Expense.fromJson(Map<String, dynamic> json) {
+    DateTime? parseUtc(dynamic val) {
+      if (val == null) return null;
+      if (val is String) return DateTime.tryParse(val)?.toUtc();
+      return null;
+    }
+
+    double? parseDouble(dynamic val) {
+      if (val == null) return null;
+      if (val is num) return val.toDouble();
+      if (val is String) return double.tryParse(val.trim());
+      return null;
+    }
+
+    final rawId = json['id'] as String?;
+    final effectiveId = (rawId != null && rawId.trim().isNotEmpty)
+        ? rawId.trim()
+        : 'exp-${DateTime.now().millisecondsSinceEpoch}';
+
+    final dateRec = json['dateRecorded'] != null
+        ? DateTime.tryParse(json['dateRecorded'] as String)
+        : null;
+    final createdUtc =
+        parseUtc(json['createdAt']) ?? dateRec?.toUtc() ?? DateTime.now().toUtc();
+    final updatedUtc = parseUtc(json['updatedAt']) ?? createdUtc;
+
+    final parsedLitres = parseDouble(json['litres'] ?? json['liters']);
+    final parsedPricePerLitre = parseDouble(
+      json['pricePerLitre'] ?? json['price_per_litre'] ?? json['pricePerLiter'],
+    );
+
+    bool parseBool(dynamic val) {
+      if (val == null) return false;
+      if (val is bool) return val;
+      if (val is String) {
+        final s = val.toLowerCase().trim();
+        return s == 'true' || s == '1';
+      }
+      if (val is num) return val == 1;
+      return false;
+    }
+
+    final parsedIsFullTank = parseBool(
+      json['isFullTank'] ?? json['is_full_tank'] ?? json['fullTank'],
+    );
+
+    final rawBikeId = json['bikeId'] as String?;
+    final rawMaintId = (json['maintenanceItemId'] ??
+        json['maintenance_item_id'] ??
+        json['serviceVisitId']) as String?;
+
+    return Expense(
+      id: effectiveId,
+      createdAt: createdUtc,
+      updatedAt: updatedUtc,
+      category: ExpenseCategory.values.firstWhere(
+        (c) => c.name == json['category'],
+        orElse: () => ExpenseCategory.other,
+      ),
+      title: json['title'] as String? ?? 'Expense',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      trackingMode: json['trackingMode'] == 'autoTrack'
+          ? ExpenseTrackingMode.autoTrack
+          : ExpenseTrackingMode.manualEntry,
+      bikeId: (rawBikeId != null && rawBikeId.trim().isNotEmpty)
+          ? rawBikeId.trim()
+          : null,
+      maintenanceItemId: (rawMaintId != null && rawMaintId.trim().isNotEmpty)
+          ? rawMaintId.trim()
+          : null,
+      litres: parsedLitres,
+      pricePerLitre: parsedPricePerLitre,
+      isFullTank: parsedIsFullTank,
+      subtitle: json['subtitle'] as String?,
+      note: json['note'] as String?,
+      dateRecorded: dateRec,
+      formattedDate: json['formattedDate'] as String?,
+    );
+  }
+
   final String id;
+  final String? bikeId;
+  final String? maintenanceItemId;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  String get effectiveId => id;
+  DateTime get effectiveCreatedAt =>
+      createdAt?.toUtc() ?? dateRecorded?.toUtc() ?? DateTime.now().toUtc();
+  DateTime get effectiveUpdatedAt =>
+      updatedAt?.toUtc() ?? effectiveCreatedAt;
+
   final ExpenseCategory category;
   final String title;
   final double amount;
   final ExpenseTrackingMode trackingMode;
+  final double? litres;
+  final double? pricePerLitre;
+  final bool isFullTank;
   final String? subtitle;
   final String? note;
   final DateTime? dateRecorded;
   final String? formattedDate;
 
-  /// Default line items matching the Alpine Ridge Tour budget ledger
-  static List<Expense> get defaultSampleExpenses => [
-        const Expense(
-          id: 'exp-1',
-          category: ExpenseCategory.fuel,
-          title: 'Fuel Cost',
-          subtitle: 'Shell V-Power 98 • 4.2 gal',
-          amount: 62.50,
-          trackingMode: ExpenseTrackingMode.autoTrack,
-          formattedDate: 'Today, 11:20 AM',
-        ),
-        const Expense(
-          id: 'exp-2',
-          category: ExpenseCategory.permits,
-          title: 'Park Permits & Passes',
-          subtitle: 'Pass #8491 • Babusar West',
-          amount: 45.00,
-          trackingMode: ExpenseTrackingMode.manualEntry,
-          formattedDate: 'Yesterday, 4:15 PM',
-        ),
-        const Expense(
-          id: 'exp-3',
-          category: ExpenseCategory.lodging,
-          title: 'Camp Lodging & Fees',
-          subtitle: 'Deosai Basecamp • 2 Nights',
-          amount: 77.00,
-          trackingMode: ExpenseTrackingMode.manualEntry,
-          formattedDate: 'Oct 14, 6:00 PM',
-        ),
-      ];
+  /// Returns the formatted subtitle for display.
+  /// For fuel expenses:
+  /// - If both [litres] and [pricePerLitre] are present, returns e.g. "10 L at Rs 275/L".
+  /// - For older refills without [litres] or [pricePerLitre], returns null so only the amount is shown.
+  /// For other categories, returns [subtitle].
+  String? get displaySubtitle {
+    if (category == ExpenseCategory.fuel) {
+      if (litres != null && litres! > 0 && pricePerLitre != null && pricePerLitre! > 0) {
+        final lStr = litres!.toStringAsFixed(2);
+        return '$lStr L at ${formatPkr(pricePerLitre)}/L';
+      }
+      return null;
+    }
+    return subtitle;
+  }
+
+  static const _sentinel = Object();
+
+  Expense copyWith({
+    String? id,
+    ExpenseCategory? category,
+    String? title,
+    double? amount,
+    ExpenseTrackingMode? trackingMode,
+    Object? bikeId = _sentinel,
+    Object? maintenanceItemId = _sentinel,
+    double? litres,
+    double? pricePerLitre,
+    bool? isFullTank,
+    String? subtitle,
+    String? note,
+    DateTime? dateRecorded,
+    String? formattedDate,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return Expense(
+      id: id ?? this.id,
+      category: category ?? this.category,
+      title: title ?? this.title,
+      amount: amount ?? this.amount,
+      trackingMode: trackingMode ?? this.trackingMode,
+      bikeId: identical(bikeId, _sentinel) ? this.bikeId : (bikeId as String?),
+      maintenanceItemId: identical(maintenanceItemId, _sentinel)
+          ? this.maintenanceItemId
+          : (maintenanceItemId as String?),
+      litres: litres ?? this.litres,
+      pricePerLitre: pricePerLitre ?? this.pricePerLitre,
+      isFullTank: isFullTank ?? this.isFullTank,
+      subtitle: subtitle ?? this.subtitle,
+      note: note ?? this.note,
+      dateRecorded: dateRecorded ?? this.dateRecorded,
+      formattedDate: formattedDate ?? this.formattedDate,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? DateTime.now().toUtc(),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Expense &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          category == other.category &&
+          title == other.title &&
+          amount == other.amount &&
+          trackingMode == other.trackingMode &&
+          bikeId == other.bikeId &&
+          maintenanceItemId == other.maintenanceItemId &&
+          litres == other.litres &&
+          pricePerLitre == other.pricePerLitre &&
+          isFullTank == other.isFullTank &&
+          subtitle == other.subtitle &&
+          note == other.note &&
+          dateRecorded == other.dateRecorded &&
+          formattedDate == other.formattedDate;
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        category,
+        title,
+        amount,
+        trackingMode,
+        bikeId,
+        maintenanceItemId,
+        litres,
+        pricePerLitre,
+        isFullTank,
+        subtitle,
+        note,
+        dateRecorded,
+        formattedDate,
+      );
+
+  Map<String, dynamic> toJson() {
+    final map = <String, dynamic>{
+      'id': id,
+      'createdAt': effectiveCreatedAt.toIso8601String(),
+      'updatedAt': effectiveUpdatedAt.toIso8601String(),
+      'category': category.name,
+      'title': title,
+      'amount': amount,
+      'trackingMode': trackingMode.name,
+      'isFullTank': isFullTank,
+      'subtitle': subtitle,
+      'note': note,
+      'dateRecorded': dateRecorded?.toIso8601String(),
+      'formattedDate': formattedDate,
+    };
+    if (bikeId != null) map['bikeId'] = bikeId;
+    if (maintenanceItemId != null) map['maintenanceItemId'] = maintenanceItemId;
+    if (litres != null) map['litres'] = litres;
+    if (pricePerLitre != null) map['pricePerLitre'] = pricePerLitre;
+    return map;
+  }
 }

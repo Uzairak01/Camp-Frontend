@@ -1,97 +1,71 @@
-import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+
+import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../maintenance/controllers/maintenance_controller.dart';
+import '../../../maintenance/domain/service_schedule_item.dart';
+import '../../../mechanics/controllers/mechanic_controller.dart';
+import '../../controllers/voice_chat_controller.dart';
+import '../../domain/voice_conversation_model.dart';
+
+/// Represents a single conversation message in the Voice Copilot dialogue.
+@immutable
+class _ChatMessage {
+  /// Creates a chat message value object.
+  const _ChatMessage({
+    required this.text,
+    required this.isUser,
+    required this.timestamp,
+  });
+
+  /// Text content of the dialogue turn.
+  final String text;
+
+  /// Whether the turn was spoken/typed by the rider (`true`) or assistant (`false`).
+  final bool isUser;
+
+  /// Time when the message occurred
+  final DateTime timestamp;
+}
 
 /// CAMP Voice Copilot Screen
-/// Specialized hands-free expedition voice assistant for motorcyclists and field mechanics.
+///
+/// Hands-free expedition voice assistant for motorcyclists with persistent
+/// chat history side panel, real app data answers, and dark navy + orange theme.
 class VoiceAssistantScreen extends StatefulWidget {
+  /// Creates the Voice Assistant Screen.
   const VoiceAssistantScreen({super.key});
 
   @override
   State<VoiceAssistantScreen> createState() => _VoiceAssistantScreenState();
 }
 
-enum CopilotState {
-  idle,
-  listening,
-  processing,
-  responding,
-  error,
-}
-
 class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
-    with TickerProviderStateMixin {
-  late AnimationController _pulseController;
-  late AnimationController _waveController;
-  late Animation<double> _pulseAnimation;
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnimation;
 
-  CopilotState _state = CopilotState.listening;
-  String _activeCommandFeedback = '';
-  String _errorMessage = '';
+  final TextEditingController _textController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
+
+  final List<_ChatMessage> _messages = [];
+  bool _isListening = false;
+  bool _isPanelOpen = false;
   String _liveTranscript = '';
-  bool _isStreamingTranscript = false;
-  Timer? _transcriptTimer;
-  int _simulationIndex = 0;
-  bool _isOfflineMode = false;
 
-  final List<String> _simulatedPhrases = const [
-    'Find a mechanic near Babusar Pass',
-    'Check tire pressure & chain slack',
-    'Navigate to Hunza Valley via KKH',
-    'How far to next high-octane fuel?',
-  ];
-
-  bool get _isListening => _state == CopilotState.listening;
-  bool get _isProcessing => _state == CopilotState.processing;
-  bool get _isResponding => _state == CopilotState.responding;
-  bool get _isError => _state == CopilotState.error;
-  bool get _isIdle => _state == CopilotState.idle;
-
-  final List<_QuickCommand> _commands = const [
-    _QuickCommand(
-      icon: Icons.vpn_key_rounded,
-      title: '"Find a mechanic near Babusar Pass"',
-      accentColor: Color(0xFFF97316),
-      badgeBg: Color(0xFF261911),
-      badgeBorder: Color(0xFF5A2A14),
-      responseMessage:
-          'Locating mechanics near Babusar Pass (N-15)... Found 2 active field mechanics within 18 km.',
-    ),
-    _QuickCommand(
-      icon: Icons.add_circle_outline_rounded,
-      title: '"Check tire pressure & chain slack"',
-      accentColor: Color(0xFF38BDF8),
-      badgeBg: Color(0xFF0C2436),
-      badgeBorder: Color(0xFF0369A1),
-      responseMessage:
-          'Front: 32 PSI (Optimal), Rear: 36 PSI (Optimal). Chain slack: 28 mm within safe tolerance.',
-    ),
-    _QuickCommand(
-      icon: Icons.map_outlined,
-      title: '"Navigate to Hunza Valley via KKH"',
-      accentColor: Color(0xFF34D399),
-      badgeBg: Color(0xFF07261C),
-      badgeBorder: Color(0xFF065F46),
-      responseMessage:
-          'Plotting route: Karakoram Highway (N-35) to Karimabad, Hunza. Total distance 284 km. Weather clear.',
-    ),
-    _QuickCommand(
-      icon: Icons.local_gas_station_rounded,
-      title: '"How far to next high-octane fuel?"',
-      accentColor: Color(0xFFFBBF24),
-      badgeBg: Color(0xFF2A200B),
-      badgeBorder: Color(0xFF78350F),
-      responseMessage:
-          'Nearest HOBC/High-Octane station is PSO Chilas, 34 km ahead. Fuel reserve safe.',
-    ),
+  static const List<String> _idleChips = [
+    'How much fuel do I have left?',
+    'What service is due next?',
+    'Find my nearest mechanic',
+    'Log a refill',
   ];
 
   @override
   void initState() {
     super.initState();
-
-    // Pulse animation for central microphone concentric rings
+    // Pulse animation controller for the central glowing mic button
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
@@ -101,1033 +75,404 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    // Waveform equalizer continuous animation
-    _waveController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    );
+    // Listen to history changes and load stored conversations
+    VoiceChatController.instance.addListener(_onVoiceChatChanged);
+    VoiceChatController.instance.load();
 
-    // Initial state setup & start listening simulation
-    _transitionTo(CopilotState.listening);
-    _startLiveTranscriptSimulation();
+    // If an active conversation exists in controller, hydrate it into the view
+    final active = VoiceChatController.instance.currentConversation;
+    if (active != null) {
+      _messages.addAll(active.messages.map((m) => _ChatMessage(
+            text: m.text,
+            isUser: m.isUser,
+            timestamp: m.timestamp,
+          )));
+    }
+  }
+
+  void _onVoiceChatChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _checkReducedMotion();
+  }
+
+  /// Pauses infinite animation loops when accessibility reduced-motion is requested.
+  void _checkReducedMotion() {
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations) {
+      if (_pulseController.isAnimating) {
+        _pulseController.stop();
+        _pulseController.value = 1.0;
+      }
+    } else if (_isListening && !_pulseController.isAnimating) {
+      _pulseController.repeat(reverse: true);
+    }
   }
 
   @override
   void dispose() {
-    _cancelTranscriptSimulation();
+    VoiceChatController.instance.removeListener(_onVoiceChatChanged);
     _pulseController.dispose();
-    _waveController.dispose();
+    _textController.dispose();
+    _searchController.dispose();
+    _focusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void _startLiveTranscriptSimulation([String? specificPhrase]) {
-    _cancelTranscriptSimulation();
-    final phrase = specificPhrase ?? _simulatedPhrases[_simulationIndex % _simulatedPhrases.length];
-    _simulationIndex++;
-
-    final words = phrase.split(' ');
-    int wordIndex = 0;
-    _liveTranscript = '';
-    _isStreamingTranscript = true;
-
-    _transcriptTimer = Timer.periodic(const Duration(milliseconds: 320), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      if (wordIndex < words.length) {
-        setState(() {
-          _liveTranscript += (wordIndex == 0 ? '' : ' ') + words[wordIndex];
-          wordIndex++;
-        });
+  /// Toggles speech listening simulation state and updates pulse animations.
+  void _toggleListening() {
+    setState(() {
+      _isListening = !_isListening;
+      _liveTranscript = '';
+      final disableAnimations =
+          MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+      if (_isListening) {
+        if (!disableAnimations) {
+          _pulseController.repeat(reverse: true);
+        } else {
+          _pulseController.stop();
+          _pulseController.value = 1.0;
+        }
       } else {
-        timer.cancel();
-        _isStreamingTranscript = false;
-        setState(() {});
-        // Settle briefly before processing so rider sees complete query
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (!mounted || _state != CopilotState.listening) return;
-          _processPhrase(_liveTranscript);
-        });
+        _pulseController.stop();
+        _pulseController.value = 1.0;
       }
     });
   }
 
-  void _cancelTranscriptSimulation() {
-    _transcriptTimer?.cancel();
-    _transcriptTimer = null;
-    _isStreamingTranscript = false;
+  /// Handles rider submission via keyboard send action.
+  void _handleSubmitted(String value) {
+    final query = value.trim();
+    if (query.isEmpty) return;
+    _textController.clear();
+    _processQuery(query);
   }
 
-  _QuickCommand _resolveCommandForQuery(String query) {
-    final lower = query.toLowerCase();
-    if (lower.contains('mechanic') ||
-        lower.contains('babusar') ||
-        lower.contains('pass') ||
-        lower.contains('repair') ||
-        lower.contains('garage')) {
-      return _commands[0];
-    } else if (lower.contains('tire') ||
-        lower.contains('pressure') ||
-        lower.contains('chain') ||
-        lower.contains('slack') ||
-        lower.contains('psi')) {
-      return _commands[1];
-    } else if (lower.contains('navigate') ||
-        lower.contains('hunza') ||
-        lower.contains('route') ||
-        lower.contains('kkh') ||
-        lower.contains('karakoram') ||
-        lower.contains('highway')) {
-      return _commands[2];
-    } else if (lower.contains('fuel') ||
-        lower.contains('petrol') ||
-        lower.contains('gas') ||
-        lower.contains('octane') ||
-        lower.contains('pso') ||
-        lower.contains('chilas')) {
-      return _commands[3];
+  /// Processes rider query, updates UI bubbles, retrieves real data, and auto-saves thread.
+  void _processQuery(String query) {
+    final clean = query.trim();
+    if (clean.isEmpty) return;
+
+    _pulseController.stop();
+    _pulseController.value = 1.0;
+
+    setState(() {
+      _isListening = false;
+      _messages.add(_ChatMessage(
+        text: clean,
+        isUser: true,
+        timestamp: DateTime.now(),
+      ));
+    });
+
+    final answer = _resolveRealDataAnswer(clean);
+
+    setState(() {
+      _messages.add(_ChatMessage(
+        text: answer,
+        isUser: false,
+        timestamp: DateTime.now(),
+      ));
+    });
+
+    // Automatically persist conversation thread with title set to first user message
+    VoiceChatController.instance.saveActiveMessage(
+      userText: clean,
+      assistantText: answer,
+    );
+
+    _scrollToBottom();
+  }
+
+  /// Automatically scrolls conversation view to reveal the latest exchange.
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
+  }
+
+  /// Opens the 320px chat history side panel.
+  void _openPanel() {
+    setState(() {
+      _isPanelOpen = true;
+    });
+  }
+
+  /// Closes the side panel and resets active search query.
+  void _closePanel() {
+    setState(() {
+      _isPanelOpen = false;
+      _searchController.clear();
+    });
+  }
+
+  /// Clears the current dialogue thread and returns to the idle prompt view.
+  void _handleNewChat() {
+    VoiceChatController.instance.startNewChat();
+    setState(() {
+      _messages.clear();
+      _isPanelOpen = false;
+      _searchController.clear();
+    });
+  }
+
+  /// Loads a selected historical conversation into the active dialogue view.
+  void _handleSelectConversation(VoiceConversation conversation) {
+    VoiceChatController.instance.selectConversation(conversation);
+    setState(() {
+      _messages
+        ..clear()
+        ..addAll(conversation.messages.map((m) => _ChatMessage(
+              text: m.text,
+              isUser: m.isUser,
+              timestamp: m.timestamp,
+            )));
+      _isPanelOpen = false;
+      _searchController.clear();
+    });
+    _scrollToBottom();
+  }
+
+  /// Resolve assistant response strictly from real app data.
+  /// If unanswerable from real data, returns "I can't answer that yet."
+  String _resolveRealDataAnswer(String query) {
+    final lower = query.trim().toLowerCase();
+
+    // 1. Fuel status query
+    if (lower == 'how much fuel do i have left?' ||
+        lower == 'how much fuel do i have left' ||
+        lower.contains('fuel left') ||
+        lower.contains('fuel remaining') ||
+        lower.contains('how much fuel') ||
+        lower == 'fuel') {
+      final activeBike = ActiveBikeController.instance.activeBike;
+      if (activeBike == null) {
+        return 'No active bike selected in your garage.';
+      }
+
+      if (activeBike.fuelRemainingLiters != null) {
+        final liters = activeBike.fuelRemainingLiters!;
+        final capacity = activeBike.fuelTankCapacityLiters;
+        if (capacity != null && capacity > 0) {
+          final pct = ((liters / capacity) * 100).round().clamp(0, 100);
+          final avg = activeBike.fuelAverageKmPerLiter;
+          if (avg != null && avg > 0) {
+            final range = (liters * avg).round();
+            return 'You have ${liters.toStringAsFixed(1)} L of fuel remaining (~$pct%). Estimated range is $range km.';
+          }
+          return 'You have ${liters.toStringAsFixed(1)} L of fuel remaining (~$pct%).';
+        }
+        return 'You have ${liters.toStringAsFixed(1)} L of fuel remaining.';
+      } else if (activeBike.fuelLevelPercent != null) {
+        return 'Your fuel level is approximately ${activeBike.fuelLevelPercent}%.';
+      } else {
+        return 'No fuel level recorded yet for ${activeBike.nickname ?? activeBike.modelName}.';
+      }
     }
 
-    // Dynamic custom command
-    return _QuickCommand(
-      icon: Icons.alt_route_rounded,
-      title: '"$query"',
-      accentColor: const Color(0xFFF97316),
-      badgeBg: const Color(0xFF261911),
-      badgeBorder: const Color(0xFF5A2A14),
-      responseMessage:
-          'Expedition telemetry query received: "$query". Cached map route and emergency mechanics notified.',
-    );
-  }
-
-  void _processPhrase(String phrase) {
-    final cleanPhrase = phrase.trim();
-    if (cleanPhrase.isEmpty) return;
-
-    _transitionTo(
-      CopilotState.processing,
-      feedback: cleanPhrase,
-    );
-
-    // Simulated Copilot Processing Delay
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-
-      final lower = cleanPhrase.toLowerCase();
-
-      // Offline mode check: certain cloud features are unavailable when offline
-      final bool isOfflineError = _isOfflineMode &&
-          (lower.contains('satellite') ||
-              lower.contains('live radar') ||
-              lower.contains('cloud') ||
-              lower.contains('online') ||
-              lower.contains('traffic delay'));
-
-      if (isOfflineError) {
-        _showErrorModal(
-          title: 'OFFLINE CACHE LIMITATION',
-          reason:
-              'Live satellite radar & online cloud telemetry require an active MESH or cellular connection. Running on local cached expedition data.',
-          onRetry: () => _handleMicTap(),
-        );
-        return;
+    // 2. Next service query
+    if (lower == 'what service is due next?' ||
+        lower == 'what service is due next' ||
+        lower.contains('service is due') ||
+        lower.contains('service due next') ||
+        lower.contains('next service') ||
+        lower == 'service') {
+      final activeBike = ActiveBikeController.instance.activeBike;
+      if (activeBike == null) {
+        return 'No active bike selected in your garage.';
       }
 
-      // Check for error simulation or unrecognized phrase
-      final bool isErrorTrigger = lower.contains('error') ||
-          lower.contains('fail') ||
-          lower.contains('asdf') ||
-          lower.contains('xyz') ||
-          lower.contains('disconnect') ||
-          lower.contains('unrecognized');
-
-      if (isErrorTrigger) {
-        _showErrorModal(
-          title: 'COMMAND UNRECOGNIZED',
-          reason:
-              'Could not match query with expedition telemetry or local waypoint cache. Road/wind noise may have clipped audio, or the command syntax was unrecognized.',
-          onRetry: () => _handleMicTap(),
-        );
-        return;
+      final predictions = MaintenanceController.instance.items(activeBike.id);
+      final overdue = predictions
+          .where((p) => p.scheduleStatus == ScheduleItemStatus.overdue)
+          .toList();
+      if (overdue.isNotEmpty) {
+        return '${overdue.first.name} is overdue for service.';
       }
 
-      final command = _resolveCommandForQuery(cleanPhrase);
-      _transitionTo(CopilotState.responding);
-      _showResponseModal(command);
-    });
-  }
-
-  void _transitionTo(CopilotState newState, {String? feedback, String? error}) {
-    if (!mounted) return;
-    setState(() {
-      _state = newState;
-      if (feedback != null) _activeCommandFeedback = feedback;
-      if (error != null) _errorMessage = error;
-
-      switch (_state) {
-        case CopilotState.idle:
-          _pulseController.stop();
-          _pulseController.value = 0.5;
-          _waveController.stop();
-          break;
-        case CopilotState.listening:
-          _errorMessage = '';
-          _pulseController.duration = const Duration(milliseconds: 1800);
-          _pulseController.repeat(reverse: true);
-          _waveController.duration = const Duration(milliseconds: 1200);
-          _waveController.repeat();
-          break;
-        case CopilotState.processing:
-          _pulseController.duration = const Duration(milliseconds: 900);
-          _pulseController.repeat(reverse: true);
-          _waveController.duration = const Duration(milliseconds: 700);
-          _waveController.repeat();
-          break;
-        case CopilotState.responding:
-          _pulseController.duration = const Duration(milliseconds: 2200);
-          _pulseController.repeat(reverse: true);
-          _waveController.duration = const Duration(milliseconds: 1300);
-          _waveController.repeat();
-          break;
-        case CopilotState.error:
-          _pulseController.stop();
-          _pulseController.value = 0.5;
-          _waveController.stop();
-          break;
+      final dueSoon = predictions
+          .where((p) => p.scheduleStatus == ScheduleItemStatus.dueSoon)
+          .toList();
+      if (dueSoon.isNotEmpty) {
+        final item = dueSoon.first;
+        if (item.remainingKm != null) {
+          return '${item.name} is due soon in ${item.remainingKm} km.';
+        }
+        return '${item.name} is due soon for service.';
       }
-    });
-  }
 
-  void _handleMicTap() {
-    if (_isListening || _isProcessing) {
-      _cancelTranscriptSimulation();
-      _transitionTo(CopilotState.idle, feedback: 'Listening paused');
-    } else {
-      _transitionTo(CopilotState.listening, feedback: '');
-      _startLiveTranscriptSimulation();
+      final withKm = predictions
+          .where((p) => p.remainingKm != null && p.remainingKm! > 0)
+          .toList();
+      if (withKm.isNotEmpty) {
+        withKm.sort((a, b) => a.remainingKm!.compareTo(b.remainingKm!));
+        return 'Next service is ${withKm.first.name} in ${withKm.first.remainingKm} km.';
+      }
+
+      if (predictions.isNotEmpty) {
+        return 'All scheduled maintenance is up to date for ${activeBike.nickname ?? activeBike.modelName}.';
+      }
+      return 'No scheduled maintenance items configured for ${activeBike.nickname ?? activeBike.modelName}.';
     }
-  }
 
-  void _executeCommand(_QuickCommand command) {
-    _cancelTranscriptSimulation();
-    setState(() {
-      _liveTranscript = command.title.replaceAll('"', '');
-    });
-    _transitionTo(
-      CopilotState.processing,
-      feedback: command.title,
-    );
-
-    // Simulated Copilot Voice Response
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (!mounted) return;
-      _transitionTo(CopilotState.responding);
-      _showResponseModal(command);
-    });
-  }
-
-  void _showResponseModal(_QuickCommand command) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF0F172A),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: Color(0xFF334155), width: 1.5),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF475569),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: command.badgeBg,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: command.badgeBorder, width: 1.2),
-                    ),
-                    child: Icon(command.icon, color: command.accentColor, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'CAMP COPILOT RESPONSE',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.8,
-                            color: Color(0xFF94A3B8),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          command.title.replaceAll('"', ''),
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF334155)),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 2.0),
-                      child: Icon(
-                        Icons.volume_up_rounded,
-                        color: Color(0xFFF97316),
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        command.responseMessage,
-                        style: const TextStyle(
-                          fontSize: 13.5,
-                          height: 1.4,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFFE2E8F0),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _transitionTo(CopilotState.idle);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFEA580C),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: const Text(
-                    'Acknowledge Command',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    ).then((_) {
-      if (mounted && _state == CopilotState.responding) {
-        _transitionTo(CopilotState.idle);
+    // 3. Saved mechanic query
+    if (lower == 'find my nearest mechanic' ||
+        lower == 'find my nearest mechanic?' ||
+        lower.contains('nearest mechanic') ||
+        lower.contains('find mechanic') ||
+        lower == 'mechanic') {
+      final mechanics = MechanicController.instance.mechanics;
+      if (mechanics.isNotEmpty) {
+        final nearest = mechanics.first;
+        final loc = nearest.durationOrLocation.trim();
+        if (loc.isNotEmpty) {
+          return 'Nearest saved mechanic is ${nearest.name} ($loc).';
+        }
+        return 'Nearest saved mechanic is ${nearest.name}.';
       }
-    });
-  }
+      return 'No saved mechanics found in your offline directory.';
+    }
 
-  /// 4. Error / No-Match Response Modal
-  void _showErrorModal({
-    required String title,
-    required String reason,
-    required VoidCallback onRetry,
-  }) {
-    _transitionTo(
-      CopilotState.error,
-      error: reason,
-    );
-
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF0F172A),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: Color(0xFF7F1D1D), width: 1.5),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF991B1B),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2E1010),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF7F1D1D), width: 1.2),
-                    ),
-                    child: const Icon(
-                      Icons.warning_amber_rounded,
-                      color: Color(0xFFEF4444),
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'CAMP COPILOT — UNRECOGNIZED',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.8,
-                            color: Color(0xFFF87171),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          title,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E1313),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF451A1A)),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 2.0),
-                      child: Icon(
-                        Icons.error_outline_rounded,
-                        color: Color(0xFFEF4444),
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        reason,
-                        style: const TextStyle(
-                          fontSize: 13.5,
-                          height: 1.4,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFFFECACA),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _transitionTo(CopilotState.idle);
-                      },
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFFCBD5E1),
-                        side: const BorderSide(color: Color(0xFF334155), width: 1.2),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text(
-                        'Dismiss',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        onRetry();
-                      },
-                      icon: const Icon(Icons.refresh_rounded, size: 18),
-                      label: const Text(
-                        'Retry Command',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFEA580C),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 0,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    ).then((_) {
-      if (mounted && _state == CopilotState.error) {
-        _transitionTo(CopilotState.idle);
+    // 4. Log a refill query
+    if (lower == 'log a refill' ||
+        lower == 'log a refill?' ||
+        lower.contains('log a refill') ||
+        lower.contains('log refill')) {
+      final activeBike = ActiveBikeController.instance.activeBike;
+      if (activeBike != null) {
+        return 'To log a refill for ${activeBike.nickname ?? activeBike.modelName}, tap "I Refilled" on the Home dashboard or add an expense under Finances.';
       }
-    });
-  }
+      return 'To log a refill, select an active bike in your garage and tap "I Refilled" on the Home dashboard.';
+    }
 
-  /// 3. Free-Form Text Input Fallback Modal
-  void _showTextInputModal() {
-    final textController = TextEditingController();
-
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF0F172A),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        side: BorderSide(color: Color(0xFF334155), width: 1.5),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            20,
-            16,
-            20,
-            MediaQuery.of(ctx).viewInsets.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF475569),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF261911),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF5A2A14), width: 1.2),
-                    ),
-                    child: const Icon(
-                      Icons.keyboard_alt_outlined,
-                      color: Color(0xFFF97316),
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'FREE-FORM RIDE COMMAND',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                          color: Color(0xFF94A3B8),
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Type Copilot Query',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              // Text Input Field Container
-              Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF334155), width: 1.2),
-                ),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 14),
-                    const Icon(
-                      Icons.chat_bubble_outline_rounded,
-                      color: Color(0xFF64748B),
-                      size: 20,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: textController,
-                        autofocus: true,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        decoration: const InputDecoration(
-                          hintText: 'e.g. Find mechanic, check chain, nearest fuel...',
-                          hintStyle: TextStyle(
-                            color: Color(0xFF64748B),
-                            fontSize: 13.5,
-                          ),
-                          border: InputBorder.none,
-                        ),
-                        onSubmitted: (value) {
-                          final val = value.trim();
-                          if (val.isNotEmpty) {
-                            Navigator.pop(ctx);
-                            _cancelTranscriptSimulation();
-                            setState(() {
-                              _liveTranscript = val;
-                            });
-                            _processPhrase(val);
-                          }
-                        },
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_upward_rounded,
-                        color: Color(0xFFF97316),
-                        size: 22,
-                      ),
-                      onPressed: () {
-                        final val = textController.text.trim();
-                        if (val.isNotEmpty) {
-                          Navigator.pop(ctx);
-                          _cancelTranscriptSimulation();
-                          setState(() {
-                            _liveTranscript = val;
-                          });
-                          _processPhrase(val);
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              // Quick suggestions chips
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _buildInputChip(
-                    label: 'Babusar Mechanics',
-                    onTap: () {
-                      textController.text = 'Locate mechanics near Babusar Pass';
-                    },
-                  ),
-                  _buildInputChip(
-                    label: 'Tire Pressure',
-                    onTap: () {
-                      textController.text = 'Check tire pressure and chain slack';
-                    },
-                  ),
-                  _buildInputChip(
-                    label: 'Nearest Fuel',
-                    onTap: () {
-                      textController.text = 'How far to next high-octane fuel?';
-                    },
-                  ),
-                  _buildInputChip(
-                    label: 'Simulate Error',
-                    isErrorChip: true,
-                    onTap: () {
-                      textController.text = 'Unrecognized audio query error';
-                    },
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildInputChip({
-    required String label,
-    required VoidCallback onTap,
-    bool isErrorChip = false,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isErrorChip ? const Color(0xFF2E1313) : const Color(0xFF1E293B),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isErrorChip ? const Color(0xFF7F1D1D) : const Color(0xFF334155),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 11.5,
-            fontWeight: FontWeight.w600,
-            color: isErrorChip ? const Color(0xFFF87171) : const Color(0xFFCBD5E1),
-          ),
-        ),
-      ),
-    );
+    // Unanswerable fallback strictly from real data
+    return "I can't answer that yet.";
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF090D14),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 1. Top App Bar (CAMP COPILOT, MESH pill, Keyboard, Close button)
-            _buildTopAppBar(),
+      body: Stack(
+        children: [
+          // Main conversation screen layer
+          SafeArea(
+            child: Column(
+              children: [
+                // 1. Header: Menu (left, 44px) & Close (right, 44px)
+                _buildHeader(),
 
-            // 1.1 Offline Mode Banner
-            if (_isOfflineMode) _buildOfflineBanner(),
+                // 2. Middle Body: Listening State, Conversation, or Idle
+                Expanded(
+                  child: _isListening
+                      ? _buildListeningBody()
+                      : (_messages.isNotEmpty
+                          ? _buildConversationBody()
+                          : _buildIdleBody()),
+                ),
 
-            // 2. Main Scrollable Content
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 14),
+                // 3. Bottom Bar: 60px Pill with TextField & Mic / Stop Button
+                _buildBottomBar(),
+              ],
+            ),
+          ),
 
-                    // 2.1 Listening Header & Subtitle
-                    _buildListeningHeader(),
-
-                    const SizedBox(height: 24),
-
-                    // 2.2 Glowing Microphone with Concentric Sound Rings
-                    _buildPulsingMicHub(),
-
-                    // 2.2.1 Cancel/Mute Control Mid-Listening
-                    _buildCancelListeningControl(),
-
-                    const SizedBox(height: 18),
-
-                    // 2.3 Live Equalizer Audio Waveform
-                    _buildEqualizerWaveform(),
-
-                    const SizedBox(height: 20),
-
-                    // 2.3.1 Live Incremental Transcript Display
-                    _buildLiveTranscriptBox(),
-
-                    const SizedBox(height: 24),
-
-                    // 2.4 Quick Rider Commands Section Header
-                    _buildCommandsHeader(),
-
-                    const SizedBox(height: 12),
-
-                    // 2.5 Quick Rider Command Cards
-                    ..._commands.map((cmd) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10.0),
-                          child: _buildCommandCard(cmd),
-                        )),
-
-                    const SizedBox(height: 6),
-
-                    // 2.6 Rider Intercom Tip Card
-                    _buildTipCard(),
-
-                    const SizedBox(height: 16),
-                  ],
+          // Dim backdrop: tapping closes the panel
+          if (_isPanelOpen) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: _closePanel,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.6),
                 ),
               ),
             ),
-
-            // 3. Bottom Telemetry Bar (Speed, Idle, Alt)
-            _buildBottomTelemetryBar(),
+            // Side panel: slides in from the left, 320px wide
+            TweenAnimationBuilder<double>(
+              tween: Tween<double>(
+                begin: (MediaQuery.maybeOf(context)?.disableAnimations ?? false)
+                    ? 0.0
+                    : -320.0,
+                end: 0.0,
+              ),
+              duration:
+                  (MediaQuery.maybeOf(context)?.disableAnimations ?? false)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              builder: (context, leftOffset, child) {
+                return Positioned(
+                  left: leftOffset,
+                  top: 0,
+                  bottom: 0,
+                  width: 320,
+                  child: child!,
+                );
+              },
+              child: _buildSidePanel(),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
 
-  /// 1. Top App Bar
-  Widget _buildTopAppBar() {
+  /// 1. Top Header: Menu button (left) and Close button (right)
+  Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: Logo badge + "CAMP" + "COPILOT" badge
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // CAMP Square Icon
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.3),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  'CAMP',
-                  style: GoogleFonts.manrope(
-                    fontSize: 7.5,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.4,
-                    color: const Color(0xFF1E293B),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              // CAMP bold text
-              const Text(
-                'CAMP',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.5,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(width: 6),
-              // COPILOT Pill Badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF3B2314),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: const Color(0xFF78350F),
-                    width: 1,
-                  ),
-                ),
-                child: const Text(
-                  'COPILOT',
-                  style: TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.6,
-                    color: Color(0xFFF59E0B),
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const Spacer(),
-
-          // Center-Right: Interactive MESH / OFFLINE Mode Toggle Pill
+          // Left: Menu button (44px circle, slides open the 320px chat history panel)
           GestureDetector(
-            onTap: () {
-              setState(() {
-                _isOfflineMode = !_isOfflineMode;
-              });
-            },
+            onTap: _openPanel,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4.5),
-              decoration: BoxDecoration(
-                color: _isOfflineMode
-                    ? const Color(0xFF261908)
-                    : const Color(0xFF0F2420),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: _isOfflineMode
-                      ? const Color(0xFF78350F)
-                      : const Color(0xFF134E4A),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _isOfflineMode
-                          ? const Color(0xFFF59E0B)
-                          : const Color(0xFF10B981),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _isOfflineMode
-                              ? const Color(0xFFF59E0B)
-                              : const Color(0xFF10B981),
-                          blurRadius: 4,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    _isOfflineMode ? 'OFFLINE CACHE' : 'MESH 5.3 ACTIVE',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.4,
-                      color: _isOfflineMode
-                          ? const Color(0xFFFBBF24)
-                          : const Color(0xFF5EEAD4),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(width: 6),
-
-          // Free-Form Keyboard Fallback Input Button
-          GestureDetector(
-            onTap: _showTextInputModal,
-            child: Container(
-              width: 32,
-              height: 32,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF1A222E),
+                color: const Color(0xFF1E293B),
                 border: Border.all(
-                  color: const Color(0xFF2E3B4E),
+                  color: const Color(0xFF334155),
                   width: 1.2,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
               ),
               child: const Icon(
-                Icons.keyboard_alt_outlined,
-                color: Color(0xFFCBD5E1),
-                size: 17,
+                Icons.menu_rounded,
+                color: Colors.white,
+                size: 22,
               ),
             ),
           ),
 
-          const SizedBox(width: 6),
-
-          // Right: Tactile Circular Close Button
+          // Right: Close button (44px circle)
           GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
+            onTap: () => Navigator.of(context).maybePop(),
             child: Container(
-              width: 32,
-              height: 32,
+              width: 44,
+              height: 44,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFF1A222E),
+                color: const Color(0xFF1E293B),
                 border: Border.all(
-                  color: const Color(0xFF2E3B4E),
+                  color: const Color(0xFF334155),
                   width: 1.2,
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
               ),
               child: const Icon(
                 Icons.close_rounded,
-                color: Color(0xFFCBD5E1),
-                size: 17,
+                color: Colors.white,
+                size: 22,
               ),
             ),
           ),
@@ -1136,187 +481,538 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
     );
   }
 
-  /// 2.1 Listening Header & Subtitle
-  Widget _buildListeningHeader() {
-    Color dotColor;
-    String titleText;
-    Color subtitleColor;
-    String subtitleText;
+  /// 2A. Idle Body
+  Widget _buildIdleBody() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 24),
+          const Text(
+            'How can I help on this ride?',
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Ask about your bike, fuel, service or saved mechanics.',
+            style: TextStyle(
+              fontSize: 14.5,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF94A3B8),
+            ),
+          ),
+          const SizedBox(height: 32),
+          ..._idleChips.map((chipText) => Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: _buildChip(chipText),
+              )),
+        ],
+      ),
+    );
+  }
 
-    switch (_state) {
-      case CopilotState.listening:
-        dotColor = const Color(0xFFF97316);
-        titleText = 'Listening...';
-        subtitleColor = const Color(0xFF7DD3FC);
-        subtitleText = _activeCommandFeedback.isNotEmpty
-            ? _activeCommandFeedback
-            : 'Helmet mic input active — say your ride\ncommand clearly';
-        break;
-      case CopilotState.processing:
-        dotColor = const Color(0xFFFBBF24);
-        titleText = 'Processing...';
-        subtitleColor = const Color(0xFFFDE68A);
-        subtitleText = _activeCommandFeedback.isNotEmpty
-            ? 'Analyzing: ${_activeCommandFeedback.replaceAll('"', '')}'
-            : 'Analyzing ride query with expedition copilot...';
-        break;
-      case CopilotState.responding:
-        dotColor = const Color(0xFF38BDF8);
-        titleText = 'Responding...';
-        subtitleColor = const Color(0xFF7DD3FC);
-        subtitleText = 'CAMP Copilot voice output active';
-        break;
-      case CopilotState.error:
-        dotColor = const Color(0xFFEF4444);
-        titleText = 'Unrecognized';
-        subtitleColor = const Color(0xFFFCA5A5);
-        subtitleText = _errorMessage.isNotEmpty
-            ? _errorMessage
-            : 'Command not recognized — tap mic to retry';
-        break;
-      case CopilotState.idle:
-        dotColor = const Color(0xFF64748B);
-        titleText = 'Mic Paused';
-        subtitleColor = const Color(0xFF94A3B8);
-        subtitleText = _activeCommandFeedback.isNotEmpty
-            ? _activeCommandFeedback
-            : 'Tap mic or say "Hey CAMP" to begin';
-        break;
-    }
+  Widget _buildChip(String text) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _processQuery(text),
+        borderRadius: BorderRadius.circular(16),
+        splashColor: const Color(0xFFF97316).withValues(alpha: 0.15),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: const Color(0xFF334155),
+              width: 1.2,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 14,
+                color: Color(0xFFF97316),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-    final bool hasGlow = _state != CopilotState.idle;
-
-    return Column(
-      children: [
-        // Status dot and Title
-        Row(
+  /// 2B. Listening State Body
+  Widget _buildListeningBody() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: dotColor,
-                boxShadow: hasGlow
-                    ? [
-                        BoxShadow(
-                          color: dotColor,
-                          blurRadius: 8,
-                          spreadRadius: 2,
-                        ),
-                      ]
-                    : null,
-              ),
+            // Centered large orange mic with animated concentric rings
+            _buildPulsingMicHub(
+              size: 240,
+              buttonSize: 100,
+              iconSize: 44,
+              isListening: true,
+              onTap: _toggleListening,
             ),
-            const SizedBox(width: 8),
-            Text(
-              titleText,
-              style: const TextStyle(
-                fontSize: 27,
+            const SizedBox(height: 28),
+            const Text(
+              'Listening…',
+              style: TextStyle(
+                fontSize: 26,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.4,
                 color: Colors.white,
               ),
             ),
+            const SizedBox(height: 10),
+            Text(
+              _liveTranscript.isNotEmpty
+                  ? _liveTranscript
+                  : 'Say your command or ask a question',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14.5,
+                fontWeight: FontWeight.w500,
+                color: _liveTranscript.isNotEmpty
+                    ? const Color(0xFFFDE68A)
+                    : const Color(0xFF94A3B8),
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          subtitleText,
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13.5,
-            height: 1.38,
-            fontWeight: FontWeight.w500,
-            color: subtitleColor,
-          ),
-        ),
-      ],
+      ),
     );
   }
 
-  /// 2.2 Glowing Microphone with Concentric Sound Rings
-  Widget _buildPulsingMicHub() {
+  /// 2C. Conversation State Body
+  Widget _buildConversationBody() {
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      itemCount: _messages.length,
+      itemBuilder: (context, index) {
+        final message = _messages[index];
+        final isUser = message.isUser;
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4.0),
+          child: Row(
+            mainAxisAlignment:
+                isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (isUser) const SizedBox(width: 48),
+              Flexible(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isUser
+                        ? const Color(0xFFF97316)
+                        : const Color(0xFF1E293B),
+                    border: isUser
+                        ? null
+                        : Border.all(
+                            color: const Color(0xFF334155), width: 1.2),
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: Radius.circular(isUser ? 16 : 4),
+                      bottomRight: Radius.circular(isUser ? 4 : 16),
+                    ),
+                  ),
+                  child: Text(
+                    message.text,
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      height: 1.35,
+                      fontWeight: isUser ? FontWeight.w600 : FontWeight.w500,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              if (!isUser) const SizedBox(width: 48),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 3. Bottom Bar: 60px pill with text field and existing mic/stop button
+  Widget _buildBottomBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+      child: Container(
+        height: 60,
+        padding: const EdgeInsets.only(left: 18, right: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(
+            color: const Color(0xFF334155),
+            width: 1.2,
+          ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _textController,
+                focusNode: _focusNode,
+                textInputAction: TextInputAction.send,
+                onSubmitted: _handleSubmitted,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w500,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Message CAMP Copilot',
+                  hintStyle: TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+              ),
+            ),
+            // Existing orange mic button inside the bar (switches to stop when listening)
+            _buildPulsingMicHub(
+              size: 52,
+              buttonSize: 44,
+              iconSize: 22,
+              isListening: _isListening,
+              overrideIcon:
+                  _isListening ? Icons.stop_rounded : Icons.mic_rounded,
+              onTap: _toggleListening,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 4. Side Panel: 320px wide drawer with New Chat button, search, and grouped history.
+  Widget _buildSidePanel() {
+    final groups = VoiceChatController.instance
+        .getGroupedConversations(query: _searchController.text);
+    final hasAnyChats = (groups['Today']?.isNotEmpty ?? false) ||
+        (groups['Yesterday']?.isNotEmpty ?? false) ||
+        (groups['Earlier']?.isNotEmpty ?? false);
+
+    return Container(
+      width: 320,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0A0F1D),
+        border: Border(
+          right: BorderSide(
+            color: Color(0xFF1E293B),
+            width: 1.5,
+          ),
+        ),
+      ),
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Panel Header: Title and Close (X) button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 10, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Chat History',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                    onPressed: _closePanel,
+                    tooltip: 'Close history',
+                  ),
+                ],
+              ),
+            ),
+
+            // "New chat" button (tactical orange)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _handleNewChat,
+                  icon: const Icon(Icons.add_rounded, color: Colors.white, size: 20),
+                  label: const Text(
+                    'New chat',
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF97316),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ),
+
+            // Search chats input field
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Container(
+                height: 44,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xFF334155),
+                    width: 1.0,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.search_rounded,
+                      size: 18,
+                      color: Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        key: const Key('voice_chat_search_field'),
+                        controller: _searchController,
+                        onChanged: (_) => setState(() {}),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        decoration: const InputDecoration(
+                          hintText: 'Search chats',
+                          hintStyle: TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          border: InputBorder.none,
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    if (_searchController.text.isNotEmpty)
+                      GestureDetector(
+                        onTap: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                        child: const Icon(
+                          Icons.clear_rounded,
+                          size: 16,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 6),
+
+            // Scrollable grouped chat history or empty state
+            Expanded(
+              child: hasAnyChats
+                  ? ListView(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      children: [
+                        for (final groupTitle in ['Today', 'Yesterday', 'Earlier'])
+                          if ((groups[groupTitle]?.isNotEmpty ?? false)) ...[
+                            Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(18, 16, 18, 6),
+                              child: Text(
+                                groupTitle,
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.6,
+                                  color: Color(0xFF64748B),
+                                ),
+                              ),
+                            ),
+                            ...groups[groupTitle]!.map(
+                              (conv) => _buildConversationTile(conv),
+                            ),
+                          ],
+                      ],
+                    )
+                  : const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.chat_bubble_outline_rounded,
+                              size: 36,
+                              color: Color(0xFF475569),
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'No chats yet',
+                              style: TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Individual historical conversation entry tile inside the side panel.
+  Widget _buildConversationTile(VoiceConversation conv) {
+    final isActive =
+        VoiceChatController.instance.currentConversation?.id == conv.id;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _handleSelectConversation(conv),
+          borderRadius: BorderRadius.circular(10),
+          splashColor: const Color(0xFFF97316).withValues(alpha: 0.15),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? const Color(0xFF1E293B)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isActive
+                    ? const Color(0xFFF97316).withValues(alpha: 0.6)
+                    : Colors.transparent,
+                width: 1.0,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 16,
+                  color: isActive
+                      ? const Color(0xFFF97316)
+                      : const Color(0xFF64748B),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    conv.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight:
+                          isActive ? FontWeight.w700 : FontWeight.w500,
+                      color: isActive ? Colors.white : const Color(0xFFCBD5E1),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Reusable Mic Widget preserving concentric rings, pulse animation,
+  /// and orange linear gradient.
+  Widget _buildPulsingMicHub({
+    required double size,
+    required double buttonSize,
+    required double iconSize,
+    required bool isListening,
+    required VoidCallback onTap,
+    IconData? overrideIcon,
+  }) {
     return AnimatedBuilder(
       animation: _pulseAnimation,
       builder: (context, child) {
-        final bool isAnimating = _isListening || _isProcessing || _isResponding;
-        final scale = isAnimating ? _pulseAnimation.value : 1.0;
+        final disableAnimations =
+            MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+        final scale =
+            (!disableAnimations && isListening) ? _pulseAnimation.value : 1.0;
 
-        Color ringOuterColor;
-        Color ringMidColor;
-        Color ringInnerColor;
-        List<Color> micGradientColors;
-        IconData micIcon;
-        Color glowColor;
-
-        switch (_state) {
-          case CopilotState.listening:
-            ringOuterColor = const Color(0xFF3E2314).withValues(alpha: 0.75);
-            ringMidColor = const Color(0xFF6B3113).withValues(alpha: 0.85);
-            ringInnerColor = const Color(0xFFEA580C).withValues(alpha: 0.65);
-            micGradientColors = const [
-              Color(0xFFFFB800),
-              Color(0xFFF97316),
-              Color(0xFFEA580C),
-            ];
-            micIcon = Icons.mic_rounded;
-            glowColor = const Color(0xFFEA580C);
-            break;
-          case CopilotState.processing:
-            ringOuterColor = const Color(0xFF3D1E08).withValues(alpha: 0.85);
-            ringMidColor = const Color(0xFF78350F).withValues(alpha: 0.85);
-            ringInnerColor = const Color(0xFFF59E0B).withValues(alpha: 0.7);
-            micGradientColors = const [
-              Color(0xFFFDE047),
-              Color(0xFFF59E0B),
-              Color(0xFFD97706),
-            ];
-            micIcon = Icons.sync_rounded;
-            glowColor = const Color(0xFFF59E0B);
-            break;
-          case CopilotState.responding:
-            ringOuterColor = const Color(0xFF082F49).withValues(alpha: 0.75);
-            ringMidColor = const Color(0xFF0369A1).withValues(alpha: 0.85);
-            ringInnerColor = const Color(0xFF38BDF8).withValues(alpha: 0.65);
-            micGradientColors = const [
-              Color(0xFF7DD3FC),
-              Color(0xFF0284C7),
-              Color(0xFF0369A1),
-            ];
-            micIcon = Icons.volume_up_rounded;
-            glowColor = const Color(0xFF0284C7);
-            break;
-          case CopilotState.error:
-            ringOuterColor = const Color(0xFF450A0A).withValues(alpha: 0.7);
-            ringMidColor = const Color(0xFF7F1D1D).withValues(alpha: 0.75);
-            ringInnerColor = const Color(0xFFEF4444).withValues(alpha: 0.65);
-            micGradientColors = const [
-              Color(0xFFFCA5A5),
-              Color(0xFFEF4444),
-              Color(0xFFB91C1C),
-            ];
-            micIcon = Icons.priority_high_rounded;
-            glowColor = const Color(0xFFEF4444);
-            break;
-          case CopilotState.idle:
-            ringOuterColor = const Color(0xFF3E2314).withValues(alpha: 0.25);
-            ringMidColor = const Color(0xFF6B3113).withValues(alpha: 0.3);
-            ringInnerColor = const Color(0xFFEA580C).withValues(alpha: 0.25);
-            micGradientColors = const [
-              Color(0xFF475569),
-              Color(0xFF334155),
-              Color(0xFF1E293B),
-            ];
-            micIcon = Icons.mic_off_rounded;
-            glowColor = Colors.transparent;
-            break;
-        }
+        final ringOuterColor =
+            const Color(0xFF3E2314).withValues(alpha: 0.75);
+        final ringMidColor =
+            const Color(0xFF6B3113).withValues(alpha: 0.85);
+        final ringInnerColor =
+            const Color(0xFFEA580C).withValues(alpha: 0.65);
+        const micGradientColors = [
+          Color(0xFFFFB800),
+          Color(0xFFF97316),
+          Color(0xFFEA580C),
+        ];
+        final micIcon = overrideIcon ?? Icons.mic_rounded;
+        const glowColor = Color(0xFFEA580C);
 
         return SizedBox(
-          width: 250,
-          height: 250,
+          width: size,
+          height: size,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -1324,13 +1020,13 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
               Transform.scale(
                 scale: scale,
                 child: Container(
-                  width: 246,
-                  height: 246,
+                  width: size * 0.98,
+                  height: size * 0.98,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: ringOuterColor,
-                      width: 1.5,
+                      width: math.max(1.0, size * 0.008),
                     ),
                   ),
                 ),
@@ -1340,14 +1036,14 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
               Transform.scale(
                 scale: math.pow(scale, 0.65).toDouble(),
                 child: Container(
-                  width: 190,
-                  height: 190,
+                  width: size * 0.76,
+                  height: size * 0.76,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: const Color(0xFF1E130B).withValues(alpha: 0.4),
                     border: Border.all(
                       color: ringMidColor,
-                      width: 1.8,
+                      width: math.max(1.0, size * 0.01),
                     ),
                   ),
                 ),
@@ -1355,51 +1051,49 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
 
               // Inner glowing concentric ring
               Container(
-                width: 138,
-                height: 138,
+                width: size * 0.55,
+                height: size * 0.55,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: ringInnerColor,
-                    width: 2.2,
+                    width: math.max(1.2, size * 0.012),
                   ),
                 ),
               ),
 
-              // Central Tactile Mic Button
+              // Central Tactile Mic / Stop Button
               GestureDetector(
-                onTap: _handleMicTap,
+                onTap: onTap,
                 child: Container(
-                  width: 106,
-                  height: 106,
+                  width: buttonSize,
+                  height: buttonSize,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: LinearGradient(
+                    gradient: const LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: micGradientColors,
                     ),
                     boxShadow: [
-                      if (glowColor != Colors.transparent)
+                      if (isListening)
                         BoxShadow(
-                          color: glowColor.withValues(
-                            alpha: isAnimating ? 0.55 : 0.25,
-                          ),
-                          blurRadius: isAnimating ? 34 : 16,
-                          spreadRadius: isAnimating ? 5 : 1,
-                          offset: const Offset(0, 4),
+                          color: glowColor.withValues(alpha: 0.55),
+                          blurRadius: math.max(8.0, size * 0.14),
+                          spreadRadius: math.max(1.0, size * 0.02),
+                          offset: const Offset(0, 3),
                         ),
                       BoxShadow(
                         color: micGradientColors.first.withValues(alpha: 0.35),
-                        blurRadius: 14,
-                        offset: const Offset(0, -2),
+                        blurRadius: math.max(4.0, size * 0.06),
+                        offset: const Offset(0, -1),
                       ),
                     ],
                   ),
                   child: Icon(
                     micIcon,
                     color: Colors.white,
-                    size: 44,
+                    size: iconSize,
                   ),
                 ),
               ),
@@ -1409,683 +1103,4 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen>
       },
     );
   }
-
-  /// 2.3 Live Equalizer Audio Waveform
-  Widget _buildEqualizerWaveform() {
-    return AnimatedBuilder(
-      animation: _waveController,
-      builder: (context, child) {
-        final baseHeights = [14.0, 22.0, 32.0, 44.0, 36.0, 44.0, 32.0, 20.0, 14.0];
-        final t = _waveController.value * 2 * math.pi;
-
-        List<Color> waveColors;
-        switch (_state) {
-          case CopilotState.listening:
-            waveColors = const [
-              Color(0xFFFDE68A),
-              Color(0xFFF59E0B),
-              Color(0xFFEA580C),
-            ];
-            break;
-          case CopilotState.processing:
-            waveColors = const [
-              Color(0xFFFEF08A),
-              Color(0xFFF59E0B),
-              Color(0xFFD97706),
-            ];
-            break;
-          case CopilotState.responding:
-            waveColors = const [
-              Color(0xFFBAE6FD),
-              Color(0xFF38BDF8),
-              Color(0xFF0284C7),
-            ];
-            break;
-          case CopilotState.error:
-            waveColors = const [
-              Color(0xFFFECACA),
-              Color(0xFFEF4444),
-              Color(0xFF991B1B),
-            ];
-            break;
-          case CopilotState.idle:
-            waveColors = const [
-              Color(0xFF64748B),
-              Color(0xFF475569),
-              Color(0xFF334155),
-            ];
-            break;
-        }
-
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: List.generate(9, (index) {
-            double fluctuation = 0;
-            if (_isListening) {
-              fluctuation = math.sin(t + (index * 0.7)) * 7.0;
-            } else if (_isProcessing) {
-              fluctuation = math.sin(t * 1.5 + (index * 0.5)) * 4.5;
-            } else if (_isResponding) {
-              fluctuation = math.sin(t * 1.8 + (index * 0.8)) * 8.0;
-            } else {
-              // idle or error: resting minimal height
-              fluctuation = -baseHeights[index] + 8.0;
-            }
-
-            final barHeight = math.max(6.0, baseHeights[index] + fluctuation);
-
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 2.8),
-              width: 5.5,
-              height: barHeight,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(3),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: waveColors,
-                ),
-              ),
-            );
-          }),
-        );
-      },
-    );
-  }
-
-  /// 2.3.1 Live Incremental Transcript Display
-  Widget _buildLiveTranscriptBox() {
-    final hasContent = _liveTranscript.isNotEmpty;
-
-    Color boxBorderColor;
-    if (_isListening) {
-      boxBorderColor = const Color(0xFFF97316).withValues(alpha: 0.5);
-    } else if (_isProcessing) {
-      boxBorderColor = const Color(0xFFFBBF24).withValues(alpha: 0.5);
-    } else if (_isResponding) {
-      boxBorderColor = const Color(0xFF38BDF8).withValues(alpha: 0.5);
-    } else if (_isError) {
-      boxBorderColor = const Color(0xFFEF4444).withValues(alpha: 0.5);
-    } else {
-      boxBorderColor = const Color(0xFF1E293B);
-    }
-
-    String tagLabel;
-    Color tagColor;
-    if (_isListening) {
-      tagLabel = 'LIVE TRANSCRIPT';
-      tagColor = const Color(0xFFF97316);
-    } else if (_isProcessing) {
-      tagLabel = 'ANALYZING QUERY';
-      tagColor = const Color(0xFFFBBF24);
-    } else if (_isResponding) {
-      tagLabel = 'COMMAND RESOLVED';
-      tagColor = const Color(0xFF38BDF8);
-    } else if (_isError) {
-      tagLabel = 'AUDIO UNRECOGNIZED';
-      tagColor = const Color(0xFFEF4444);
-    } else {
-      tagLabel = 'TRANSCRIPT BUFFER';
-      tagColor = const Color(0xFF64748B);
-    }
-
-    return GestureDetector(
-      onTap: _showTextInputModal,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0F172A),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: boxBorderColor,
-            width: 1.2,
-          ),
-          boxShadow: [
-            if (_isListening)
-              BoxShadow(
-                color: const Color(0xFFF97316).withValues(alpha: 0.1),
-                blurRadius: 14,
-                spreadRadius: 1,
-              ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.graphic_eq_rounded,
-                      size: 14,
-                      color: tagColor,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      tagLabel,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.8,
-                        color: tagColor,
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isStreamingTranscript)
-                  Row(
-                    children: [
-                      Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Color(0xFFEF4444),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Color(0xFFEF4444),
-                              blurRadius: 4,
-                              spreadRadius: 1,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 5),
-                      const Text(
-                        'REC',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.6,
-                          color: Color(0xFFEF4444),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  Row(
-                    children: const [
-                      Icon(
-                        Icons.edit_note_rounded,
-                        size: 15,
-                        color: Color(0xFF64748B),
-                      ),
-                      SizedBox(width: 3),
-                      Text(
-                        'Tap to type',
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF64748B),
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(
-                    text: hasContent
-                        ? _liveTranscript
-                        : (_isListening
-                            ? 'Listening for voice input...'
-                            : 'Tap mic or say "Hey CAMP" to begin'),
-                    style: TextStyle(
-                      fontSize: 14,
-                      height: 1.35,
-                      fontWeight: hasContent ? FontWeight.w700 : FontWeight.w500,
-                      color: hasContent ? Colors.white : const Color(0xFF64748B),
-                    ),
-                  ),
-                  if (_isStreamingTranscript)
-                    const TextSpan(
-                      text: ' ▍',
-                      style: TextStyle(
-                        color: Color(0xFFF97316),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 2.4 Quick Commands Section Header
-  Widget _buildCommandsHeader() {
-    return Row(
-      children: [
-        const Text(
-          'QUICK RIDER COMMANDS',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-            color: Color(0xFF94A3B8),
-          ),
-        ),
-        const Spacer(),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(
-              Icons.bolt_rounded,
-              color: Color(0xFFFBBF24),
-              size: 15,
-            ),
-            SizedBox(width: 3),
-            Text(
-              'Intercom Ready',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFFFBBF24),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  /// 2.5 Individual Command Card
-  Widget _buildCommandCard(_QuickCommand command) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _executeCommand(command),
-        borderRadius: BorderRadius.circular(16),
-        splashColor: command.accentColor.withValues(alpha: 0.15),
-        highlightColor: command.accentColor.withValues(alpha: 0.08),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12.5),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: const Color(0xFF1E293B),
-              width: 1.2,
-            ),
-          ),
-          child: Row(
-            children: [
-              // Icon Container
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: command.badgeBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: command.badgeBorder,
-                    width: 1.2,
-                  ),
-                ),
-                child: Icon(
-                  command.icon,
-                  color: command.accentColor,
-                  size: 21,
-                ),
-              ),
-              const SizedBox(width: 14),
-              // Command Text
-              Expanded(
-                child: Text(
-                  command.title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ),
-              // Chevron Trailing
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: Color(0xFF475569),
-                size: 22,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 2.6 Rider Intercom Tip Card
-  Widget _buildTipCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1526),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: const Color(0xFF1E293B),
-          width: 1.2,
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 1.0),
-            child: Icon(
-              Icons.lightbulb_rounded,
-              color: Color(0xFFFBBF24),
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: RichText(
-              text: TextSpan(
-                style: GoogleFonts.manrope(
-                  fontSize: 12,
-                  height: 1.4,
-                  color: const Color(0xFF94A3B8),
-                  fontWeight: FontWeight.w500,
-                ),
-                children: const [
-                  TextSpan(text: 'Tip: Say '),
-                  TextSpan(
-                    text: '"Hey CAMP"',
-                    style: TextStyle(
-                      color: Color(0xFFF59E0B),
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  TextSpan(
-                    text: ' anytime or double–tap your helmet intercom button.',
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 2.2.1 Cancel / Mute Intercom mid-listening
-  Widget _buildCancelListeningControl() {
-    if (_isIdle || _isError) {
-      return const SizedBox(height: 12);
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 14.0),
-      child: GestureDetector(
-        onTap: () {
-          _cancelTranscriptSimulation();
-          _transitionTo(CopilotState.idle, feedback: 'Listening cancelled');
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7.5),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E1313),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: const Color(0xFF7F1D1D).withValues(alpha: 0.8),
-              width: 1.1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(
-                Icons.stop_circle_outlined,
-                color: Color(0xFFEF4444),
-                size: 16,
-              ),
-              SizedBox(width: 6),
-              Text(
-                'Cancel / Mute Intercom',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFFFCA5A5),
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 1.1 Offline Expedition Banner
-  Widget _buildOfflineBanner() {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(18, 2, 18, 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1307),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color(0xFF78350F),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFD97706).withValues(alpha: 0.08),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: const Color(0xFF2E1C0A),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF92400E), width: 1),
-            ),
-            child: const Icon(
-              Icons.cloud_off_rounded,
-              color: Color(0xFFF59E0B),
-              size: 17,
-            ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'OFFLINE EXPEDITION MODE ACTIVE',
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.6,
-                    color: Color(0xFFF59E0B),
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Running on local waypoint cache (Pak-Northern Areas). Cloud voice synthesis paused.',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.3,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFFFDE68A),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () {
-              setState(() {
-                _isOfflineMode = false;
-              });
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFF2E1C0A),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0xFF92400E)),
-              ),
-              child: const Text(
-                'RECONNECT',
-                style: TextStyle(
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFFFBBF24),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 3. Bottom Telemetry Bar (Speed, Idle, Alt)
-  Widget _buildBottomTelemetryBar() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(22, 10, 22, 12),
-      decoration: const BoxDecoration(
-        color: Color(0xFF090D14),
-        border: Border(
-          top: BorderSide(
-            color: Color(0xFF1E293B),
-            width: 0.8,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Left: Speed + Idle Indicator
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF10B981),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0xFF10B981),
-                      blurRadius: 4,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 7),
-              const Text(
-                'Speed: ',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF94A3B8),
-                ),
-              ),
-              const Text(
-                '0 km/h',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
-              ),
-              const Text(
-                ' • ',
-                style: TextStyle(
-                  color: Color(0xFF475569),
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Text(
-                'Idle',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF10B981),
-                ),
-              ),
-            ],
-          ),
-
-          const Spacer(),
-
-          // Right: Altitude Metric
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(
-                Icons.north_east_rounded,
-                color: Color(0xFF64748B),
-                size: 14,
-              ),
-              SizedBox(width: 4),
-              Text(
-                'Alt: ',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF94A3B8),
-                ),
-              ),
-              Text(
-                '2,410m',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QuickCommand {
-  final IconData icon;
-  final String title;
-  final Color accentColor;
-  final Color badgeBg;
-  final Color badgeBorder;
-  final String responseMessage;
-
-  const _QuickCommand({
-    required this.icon,
-    required this.title,
-    required this.accentColor,
-    required this.badgeBg,
-    required this.badgeBorder,
-    required this.responseMessage,
-  });
 }

@@ -1,49 +1,51 @@
-/// CAMP Rider User Model
+import '../../../core/data/account_model.dart';
+
+/// CAMP Rider User Model representing an authenticated rider profile.
+///
+/// Contains user identity details loaded from the active [AccountModel].
+/// No hardcoded default account exists.
 class RiderUser {
+  /// Creates an immutable rider user instance.
   const RiderUser({
     required this.id,
     required this.name,
     required this.email,
     required this.phone,
-    this.callSign = 'Ghost Rider',
-    this.helmetTokenId = 'CAMP-OBD-9842',
-    this.telemetryActive = true,
-    this.biometricEnabled = true,
     this.memberSince,
   });
 
+  /// Factory creating an authenticated [RiderUser] from an [AccountModel].
+  factory RiderUser.fromAccount(AccountModel account) {
+    return RiderUser(
+      id: account.id,
+      name: account.name,
+      email: account.email,
+      phone: account.phone,
+      memberSince: account.createdAt,
+    );
+  }
+
+  /// Unique rider identifier.
   final String id;
+
+  /// Full display name of the rider.
   final String name;
+
+  /// Contact email address.
   final String email;
+
+  /// Contact telephone number.
   final String phone;
-  final String callSign;
-  final String helmetTokenId;
-  final bool telemetryActive;
-  final bool biometricEnabled;
+
+  /// Registration date of the rider account.
   final DateTime? memberSince;
 
-  /// Default mock rider matching the screenshot mockup
-  static RiderUser defaultRider = RiderUser(
-    id: 'RIDER-441-MX',
-    name: 'Alex Henderson',
-    email: 'moto.rider@camp.io',
-    phone: '+1 (555) 019–2834',
-    callSign: 'Apex Navigator',
-    helmetTokenId: 'TOKEN-SCHUBERTH-C5',
-    telemetryActive: true,
-    biometricEnabled: true,
-    memberSince: DateTime(2024, 3, 15),
-  );
-
+  /// Creates a copy of this rider with updated fields.
   RiderUser copyWith({
     String? id,
     String? name,
     String? email,
     String? phone,
-    String? callSign,
-    String? helmetTokenId,
-    bool? telemetryActive,
-    bool? biometricEnabled,
     DateTime? memberSince,
   }) {
     return RiderUser(
@@ -51,10 +53,6 @@ class RiderUser {
       name: name ?? this.name,
       email: email ?? this.email,
       phone: phone ?? this.phone,
-      callSign: callSign ?? this.callSign,
-      helmetTokenId: helmetTokenId ?? this.helmetTokenId,
-      telemetryActive: telemetryActive ?? this.telemetryActive,
-      biometricEnabled: biometricEnabled ?? this.biometricEnabled,
       memberSince: memberSince ?? this.memberSince,
     );
   }

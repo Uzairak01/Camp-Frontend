@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/auth_colors.dart';
 
-/// Top branding header for CAMP Auth screens
+/// Top branding header for CAMP Auth screens.
+///
+/// Displays the official CAMP logo and wordmark (without the orange dot).
+/// All unbacked status pills (EXPEDITION • ADVENTURE, SYNC) and the compass
+/// button have been removed in accordance with the Phase H-1 honesty pass.
 class AuthBrandHeader extends StatelessWidget {
+  /// Header for the Sign In screen featuring the centered CAMP logo and wordmark.
   const AuthBrandHeader.signIn({
     super.key,
     this.onCompassTap,
@@ -11,6 +16,8 @@ class AuthBrandHeader extends StatelessWidget {
         onBack = null,
         onSyncTap = null;
 
+  /// Header for the Sign Up and Forgot Password screens featuring the Back button
+  /// and centered CAMP logo and wordmark without the SYNC pill.
   const AuthBrandHeader.signUp({
     super.key,
     this.onBack,
@@ -18,186 +25,78 @@ class AuthBrandHeader extends StatelessWidget {
   })  : isSignUp = true,
         onCompassTap = null;
 
+  /// Whether this header is rendering in the sign-up / back-navigation layout.
   final bool isSignUp;
+
+  /// Optional legacy callback retained for backwards-compatibility.
   final VoidCallback? onCompassTap;
+
+  /// Callback when the back navigation button is tapped.
   final VoidCallback? onBack;
+
+  /// Optional legacy callback retained for backwards-compatibility.
   final VoidCallback? onSyncTap;
 
-  @override
-  Widget build(BuildContext context) {
-    if (isSignUp) {
-      return _buildSignUpHeader(context);
-    }
-    return _buildSignInHeader(context);
-  }
-
-  /// Sign In Header: Compass Button (left), White CAMP badge + CAMP text (center), Pill below
-  Widget _buildSignInHeader(BuildContext context) {
-    return Column(
+  Widget _buildBrandMark() {
+    return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const SizedBox(height: 12),
-        // Row with Reticle button and Center Logo
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            // Left Reticle / Compass button
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 20),
-                child: GestureDetector(
-                  onTap: onCompassTap,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: AuthColors.pillDarkBg,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: AuthColors.pillBorder,
-                            width: 1,
-                          ),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.explore_outlined,
-                            color: Color(0xFFD4CDC6),
-                            size: 21,
-                          ),
-                        ),
-                      ),
-                      // Little orange indicator dot
-                      Positioned(
-                        top: -1,
-                        right: -1,
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: AuthColors.orangePrimary,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Center: White Logo Badge + "CAMP" text
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // White rounded square badge with animal emblem and CAMP
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.25),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.pets_rounded,
-                        color: Color(0xFFD95200),
-                        size: 16,
-                      ),
-                      Text(
-                        'CAMP',
-                        style: GoogleFonts.manrope(
-                          color: const Color(0xFF14171A),
-                          fontSize: 8.5,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  'CAMP',
-                  style: GoogleFonts.manrope(
-                    color: Colors.white,
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                  ),
-                ),
-                Container(
-                  width: 6,
-                  height: 6,
-                  margin: const EdgeInsets.only(left: 3, top: 12),
-                  decoration: const BoxDecoration(
-                    color: AuthColors.orangePrimary,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 12),
-
-        // Underneath Pill: ((•)) TELEMETRY • ADVENTURE
+        // Rounded square badge with CAMP app icon
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6.5),
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
-            color: AuthColors.pillDarkBg,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: AuthColors.pillBorder,
-              width: 1,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.sensors_rounded,
-                color: Color(0xFFD4CDC6),
-                size: 15,
-              ),
-              const SizedBox(width: 7),
-              Text(
-                'TELEMETRY • ADVENTURE',
-                style: GoogleFonts.manrope(
-                  color: const Color(0xFFE2DDD7),
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2,
-                ),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.25),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
             ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.asset(
+              'assets/icons/app_icon.png',
+              width: 44,
+              height: 44,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          'CAMP',
+          style: GoogleFonts.manrope(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1.5,
           ),
         ),
       ],
     );
   }
 
-  /// Sign Up Header: Back Button (left), CAMP • (center), 🛜 SYNC pill (right)
+  /// Sign In Header: Centered Logo and CAMP text without compass or EXPEDITION pill.
+  Widget _buildSignInHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Center(
+        child: _buildBrandMark(),
+      ),
+    );
+  }
+
+  /// Sign Up Header: Back Button (left) and centered CAMP mark without SYNC pill.
   Widget _buildSignUpHeader(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: Back button
           GestureDetector(
             onTap: onBack ?? () => Navigator.of(context).maybePop(),
             child: Container(
@@ -220,69 +119,19 @@ class AuthBrandHeader extends StatelessWidget {
               ),
             ),
           ),
-
-          // Center: CAMP •
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'CAMP',
-                style: GoogleFonts.manrope(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1.5,
-                ),
-              ),
-              Container(
-                width: 7,
-                height: 7,
-                margin: const EdgeInsets.only(left: 4, top: 4),
-                decoration: const BoxDecoration(
-                  color: AuthColors.orangePrimary,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ],
-          ),
-
-          // Right: 🛜 SYNC pill
-          GestureDetector(
-            onTap: onSyncTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                color: AuthColors.pillDarkBg,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: AuthColors.pillBorder,
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.wifi_tethering_rounded,
-                    color: AuthColors.orangeLight,
-                    size: 15,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'SYNC',
-                    style: GoogleFonts.manrope(
-                      color: const Color(0xFFE2DDD7),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.1,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _buildBrandMark(),
+          // Balances the back button width so the brand mark stays centered
+          const SizedBox(width: 42),
         ],
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isSignUp) {
+      return _buildSignUpHeader(context);
+    }
+    return _buildSignInHeader(context);
   }
 }

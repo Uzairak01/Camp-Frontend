@@ -67,6 +67,9 @@ class AppColors {
         ),
       ];
 
+  /// Alias for recessed / inset element
+  static List<BoxShadow> get skeuInset => skeuRecessed;
+
   /// Floating dark dock
   static List<BoxShadow> get dockShadow => [
         const BoxShadow(

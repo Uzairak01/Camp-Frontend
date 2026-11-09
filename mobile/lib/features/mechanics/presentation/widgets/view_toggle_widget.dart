@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
+
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
 
 class ViewToggleWidget extends StatelessWidget {
-  final bool isListView;
-  final ValueChanged<bool> onToggle;
-
   const ViewToggleWidget({
-    super.key,
     required this.isListView,
     required this.onToggle,
+    super.key,
   });
+  final bool isListView;
+  final ValueChanged<bool> onToggle;
 
   static const LinearGradient _orangeGradient = LinearGradient(
     begin: Alignment.topLeft,
@@ -41,7 +41,9 @@ class ViewToggleWidget extends StatelessWidget {
                 AnimatedAlign(
                   duration: const Duration(milliseconds: 250),
                   curve: Curves.easeInOutCubic,
-                  alignment: isListView ? Alignment.centerLeft : Alignment.centerRight,
+                  alignment: isListView
+                      ? Alignment.centerLeft
+                      : Alignment.centerRight,
                   child: Container(
                     width: tabWidth,
                     height: 40,

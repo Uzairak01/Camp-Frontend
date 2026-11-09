@@ -1,13 +1,22 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../../../core/utils/skeuomorphic_container.dart';
 import '../../../../core/widgets/widgets.dart';
 import '../../../auth/controllers/auth_controller.dart';
+import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../maintenance/controllers/maintenance_controller.dart';
+import '../../../maintenance/controllers/post_ride_report_controller.dart';
+import '../../../mechanics/controllers/mechanic_controller.dart';
+import '../../controllers/profile_controller.dart';
 
 /// CAMP's soft-tactile side navigation overlay.
+/// All badges and counts come strictly from repositories (hide when count is 0).
 class AppDrawerWidget extends StatelessWidget {
   const AppDrawerWidget({super.key});
 
@@ -33,50 +42,105 @@ class AppDrawerWidget extends StatelessWidget {
             _riderSummary(context),
             const SizedBox(height: 18),
             Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                physics: const BouncingScrollPhysics(),
-                children: [
-                  _menuItem(context, icon: Icons.person_outline_rounded, title: 'User Profile', route: '/profile'),
-                  _menuItem(context, icon: Icons.directions_bike_rounded, title: 'Bike Profile', badge: 'Active', route: '/bike-profile'),
-                  _menuItem(context, icon: Icons.two_wheeler_rounded, iconColor: _orange, title: 'Add a Motorcycle', subtitle: 'Vision & Telemetry Onboarding', badge: 'Step 1 of 4', orangeBadge: true, route: '/add-bike'),
-                  _menuItem(
-                    context,
-                    icon: Icons.cloud_download_outlined,
-                    title: 'Route Packs',
-                    subtitle: 'Offline Topo & Telemetry',
-                    badge: '5 Available',
-                    orangeBadge: true,
-                    route: '/route-packs',
-                  ),
-                  _menuItem(context, icon: Icons.access_time_rounded, title: 'Ride History', subtitle: 'GPS Tracks & Stats', badge: '24 Logged', route: '/ride-history'),
-                  _menuItem(context, icon: Icons.compass_calibration_rounded, title: 'Predictive Maintenance', notification: '1', route: '/predictive-maintenance'),
-                  _menuItem(context, icon: Icons.handyman_rounded, iconColor: _orange, title: 'Find a Mechanic', subtitle: 'Community Pitstops & Roadside', badge: 'Active', orangeBadge: true, route: '/mechanics'),
-                  _menuItem(context, icon: Icons.build_outlined, iconColor: _orange, title: 'Add a Mechanic', subtitle: 'Community Pitstops', badge: '+ Contributor', orangeBadge: true, route: '/add-mechanic'),
-                  _menuItem(context, icon: Icons.settings_suggest_rounded, title: 'Carburetor Tuning', subtitle: 'High Altitude Jetting', badge: 'Tuning Req.', orangeBadge: true, route: '/carburetor-tuning'),
-                  _menuItem(context, icon: Icons.settings_outlined, title: 'Settings', route: '/settings'),
-                  _menuItem(
-                    context,
-                    icon: Icons.emergency_rounded,
-                    iconColor: AppColors.alertRed,
-                    title: 'Emergency SOS & Telematics',
-                    route: '/emergency-sos',
-                  ),
-                  _menuItem(
-                    context,
-                    icon: Icons.vpn_key_rounded,
-                    iconColor: _orange,
-                    title: 'Rider Sign In / Register',
-                    subtitle: 'Telemetry & Route Sync',
-                    badge: 'Auth',
-                    orangeBadge: true,
-                    route: '/sign-in',
-                  ),
-                ],
+              child: ListenableBuilder(
+                listenable: Listenable.merge([
+                  ActiveBikeController.instance,
+                  PostRideReportController.instance,
+                  MechanicController.instance,
+                  MaintenanceController.instance,
+                ]),
+                builder: (context, _) {
+                  final activeBike = ActiveBikeController.instance.activeBike;
+                  final bikeCount = ActiveBikeController.instance.bikes.length;
+                  final ridesCount = PostRideReportController.instance.reports.length;
+                  final dueCount = MaintenanceController.instance.countDueItems(activeBike?.id);
+                  final mechCount = MechanicController.instance.mechanics.length;
+
+                  return ListView(
+                    padding: EdgeInsets.zero,
+                    physics: const BouncingScrollPhysics(),
+                    children: [
+                      _menuItem(
+                        context,
+                        icon: Icons.person_outline_rounded,
+                        title: 'User Profile',
+                        route: CampRoutes.profile,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.garage_rounded,
+                        iconColor: _orange,
+                        title: 'My Garage',
+                        subtitle: 'Manage Fleet & Active Rig',
+                        badge: bikeCount > 0 ? '$bikeCount' : null,
+                        orangeBadge: true,
+                        route: CampRoutes.garage,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.directions_bike_rounded,
+                        title: 'Bike Profile',
+                        badge: activeBike != null ? 'Active' : null,
+                        route: CampRoutes.bikeProfile,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.cloud_download_outlined,
+                        title: 'Route Packs',
+                        subtitle: 'Offline Topo & Maps',
+                        route: CampRoutes.routePacks,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.access_time_rounded,
+                        title: 'Ride History',
+                        subtitle: 'GPS Tracks & Stats',
+                        badge: ridesCount > 0 ? '$ridesCount' : null,
+                        route: CampRoutes.rideHistory,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.compass_calibration_rounded,
+                        title: 'Predictive Maintenance',
+                        notification: dueCount > 0 ? '$dueCount' : null,
+                        route: CampRoutes.predictiveMaintenance,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.handyman_rounded,
+                        iconColor: _orange,
+                        title: 'Find a Mechanic',
+                        subtitle: 'Community Pitstops & Roadside',
+                        badge: mechCount > 0 ? '$mechCount' : null,
+                        orangeBadge: true,
+                        route: CampRoutes.mechanics,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.build_outlined,
+                        iconColor: _orange,
+                        title: 'Add a Mechanic',
+                        subtitle: 'Community Pitstops',
+                        route: CampRoutes.addMechanic,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.settings_outlined,
+                        title: 'Settings',
+                        route: CampRoutes.settings,
+                      ),
+                      _menuItem(
+                        context,
+                        icon: Icons.emergency_rounded,
+                        iconColor: AppColors.alertRed,
+                        title: 'Emergency SOS',
+                        route: CampRoutes.emergencySos,
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
-            const SizedBox(height: 12),
-            _obdStatus(),
             const SizedBox(height: 12),
             _logout(context),
           ]),
@@ -86,11 +150,7 @@ class AppDrawerWidget extends StatelessWidget {
   }
 
   Widget _topBar(BuildContext context) => Row(children: [
-        Text(
-          'CAMP',
-          style: GoogleFonts.manrope(color: AppColors.darkCharcoal, fontSize: 23, fontWeight: FontWeight.w900, letterSpacing: .2),
-        ),
-        Container(width: 8, height: 8, margin: const EdgeInsets.only(left: 3, top: 8), decoration: const BoxDecoration(color: _orange, shape: BoxShape.circle)),
+        const CampLogo(fontSize: 22, dotSize: 7, iconSize: 28, showDot: true),
         const Spacer(),
         GestureDetector(
           onTap: () => Navigator.of(context).pop(),
@@ -108,14 +168,64 @@ class AppDrawerWidget extends StatelessWidget {
       ]);
 
   Widget _riderSummary(BuildContext context) => ListenableBuilder(
-        listenable: AuthController.instance,
+        listenable: Listenable.merge([
+          ProfileController.instance,
+          ActiveBikeController.instance,
+          MaintenanceController.instance,
+        ]),
         builder: (context, _) {
-          final riderName = AuthController.instance.riderDisplayName;
+          final profile = ProfileController.instance;
+          final riderName = profile.fullName;
+          final riderFirstName = profile.firstName;
+          final activeBike = ActiveBikeController.instance.activeBike;
+          final bikeName = activeBike?.name ?? 'No active bike';
+          final loggedKm = activeBike != null
+              ? '${activeBike.odometerKm} km logged'
+              : '0 km logged';
+
+          Widget avatarContent;
+          if (profile.avatarPath != null && profile.avatarPath!.isNotEmpty) {
+            final file = File(profile.avatarPath!);
+            if (file.existsSync()) {
+              avatarContent = ClipOval(
+                child: Image.file(file, width: 50, height: 50, fit: BoxFit.cover),
+              );
+            } else {
+              avatarContent = Text(
+                riderFirstName.isNotEmpty
+                    ? riderFirstName[0].toUpperCase()
+                    : 'R',
+                style: GoogleFonts.manrope(
+                  color: AppColors.terracotta,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+              );
+            }
+          } else {
+            avatarContent = Text(
+              riderFirstName.isNotEmpty
+                  ? riderFirstName[0].toUpperCase()
+                  : 'R',
+              style: GoogleFonts.manrope(
+                color: AppColors.terracotta,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+              ),
+            );
+          }
+
+          String? statusBadge;
+          if (activeBike != null && MaintenanceController.instance.hasMaintenanceData(activeBike)) {
+            final due = MaintenanceController.instance.countDueItems(activeBike.id);
+            statusBadge = due > 0 ? '$due due' : 'Up to date';
+          }
+
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () {
+            onTap: () async {
               Navigator.of(context).pop();
-              Navigator.of(context).pushNamed('/profile');
+              Navigator.of(context).pushNamed(CampRoutes.profile);
             },
             child: SkeuomorphicContainer(
               borderRadius: AppColors.radiusTile,
@@ -123,41 +233,50 @@ class AppDrawerWidget extends StatelessWidget {
               padding: const EdgeInsets.all(14),
               child: Column(children: [
                 Row(children: [
-                  Stack(clipBehavior: Clip.none, children: [
-                    Container(
-                      width: 54,
-                      height: 54,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: AppColors.clay,
-                        border: Border.all(color: _orange, width: 2),
-                      ),
-                      child: const Icon(Icons.person_rounded, color: AppColors.terracotta, size: 29),
+                  Container(
+                    width: 54,
+                    height: 54,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.clay,
+                      border: Border.all(color: _orange, width: 2),
                     ),
-                    const Positioned(right: -1, bottom: 1, child: _StatusDot(color: AppColors.statusGreen)),
-                  ]),
+                    child: avatarContent,
+                  ),
                   const SizedBox(width: 12),
-                  Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(riderName, style: AppTextStyles.cardTitle),
-                    const SizedBox(height: 3),
-                    Text('BMW R 1250 GS Adventure', style: AppTextStyles.caption),
-                  ])),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(riderName, style: AppTextStyles.cardTitle),
+                        const SizedBox(height: 3),
+                        Text(bikeName, style: AppTextStyles.caption),
+                      ],
+                    ),
+                  ),
                 ]),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Divider(height: 1, color: Color(0x11000000)),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Divider(height: 1, color: Color(0x11000000)),
+                ),
+                Row(children: [
+                  if (statusBadge != null)
+                    _pill(statusBadge, icon: Icons.build_circle_rounded, orange: statusBadge.contains('due')),
+                  const Spacer(),
+                  Text(
+                    loggedKm,
+                    style: AppTextStyles.body.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ]),
+              ]),
             ),
-            Row(children: [
-              _pill('PRO Touring', icon: Icons.emoji_events_rounded, orange: true),
-              const Spacer(),
-              Text('14,820 km logged', style: AppTextStyles.body.copyWith(fontWeight: FontWeight.w700, fontSize: 11)),
-            ]),
-          ]),
-        ),
+          );
+        },
       );
-    },
-  );
 
   Widget _menuItem(
     BuildContext context, {
@@ -174,7 +293,7 @@ class AppDrawerWidget extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: GestureDetector(
-          onTap: () {
+          onTap: () async {
             Navigator.of(context).pop();
             if (onTap != null) {
               onTap();
@@ -213,7 +332,7 @@ class AppDrawerWidget extends StatelessWidget {
       );
 
   Widget _pill(String label, {IconData? icon, bool orange = false}) => Container(
-        constraints: const BoxConstraints(maxWidth: 76),
+        constraints: const BoxConstraints(maxWidth: 86),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
           color: orange ? const Color(0xFFFFF0DB) : AppColors.clayDark,
@@ -244,21 +363,14 @@ class AppDrawerWidget extends StatelessWidget {
         child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900)),
       );
 
-  Widget _obdStatus() => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(children: [
-          const _StatusDot(color: Color(0xFF65D4AD), size: 8),
-          const SizedBox(width: 8),
-          Expanded(child: Text('OBD-II Bluetooth 5.3', style: AppTextStyles.caption.copyWith(color: AppColors.charcoalLight, fontWeight: FontWeight.w700))),
-          Text('v3.4.1', style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700)),
-        ]),
-      );
-
   Widget _logout(BuildContext context) => GestureDetector(
-        onTap: () {
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context).hideCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
+        onTap: () async {
+          final navigator = Navigator.of(context);
+          final messenger = ScaffoldMessenger.of(context);
+          navigator.pop();
+          await AuthController.instance.signOut();
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(
             SnackBar(
               content: const Text(
                 'Logged out successfully',
@@ -274,7 +386,7 @@ class AppDrawerWidget extends StatelessWidget {
               duration: const Duration(milliseconds: 2000),
             ),
           );
-          Navigator.of(context).pushNamed('/sign-in');
+          navigator.pushNamedAndRemoveUntil(CampRoutes.signIn, (route) => false);
         },
         child: SkeuomorphicContainer(
           borderRadius: AppColors.radiusTile,
@@ -284,27 +396,7 @@ class AppDrawerWidget extends StatelessWidget {
             const Icon(Icons.logout_rounded, color: AppColors.alertRed, size: 20),
             const SizedBox(width: 10),
             Text('Log Out', style: AppTextStyles.itemTitle.copyWith(color: AppColors.alertRed)),
-            const Spacer(),
-            Text('GS #441', style: AppTextStyles.caption.copyWith(color: AppColors.alertRed, fontWeight: FontWeight.w800)),
           ]),
-        ),
-      );
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.color, this.size = 12});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: Border.all(color: AppColors.clay, width: 2),
         ),
       );
 }

@@ -122,7 +122,7 @@ class _CopilotInputField extends StatelessWidget {
   );
 
   static const _inputDecoration = InputDecoration(
-    hintText: '"Hey CAMP, how\'s tire pressure on trail..."',
+    hintText: 'Ask about fuel, service, or mechanics...',
     hintStyle: _hintStyle,
     border: InputBorder.none,
     isDense: true,

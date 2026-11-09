@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/utils/currency_formatter.dart';
 import '../../../../core/widgets/widgets.dart';
 import '../../domain/trip_budget_model.dart';
 
@@ -11,7 +12,11 @@ import '../../domain/trip_budget_model.dart';
 class EditTripBudgetScreen extends StatefulWidget {
   const EditTripBudgetScreen({
     super.key,
-    this.initialBudget = TripBudget.defaultSampleBudget,
+    this.initialBudget = const TripBudget(
+      tripName: '',
+      capAmount: 0.0,
+      allocatedSoFar: 0.0,
+    ),
   });
 
   final TripBudget initialBudget;
@@ -24,8 +29,8 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
   late final TextEditingController _tripNameCtrl;
   late final TextEditingController _budgetCapCtrl;
 
-  late String _startDate;
-  late String _endDate;
+  DateTime? _startDate;
+  DateTime? _endDate;
   late double _allocatedSoFar;
 
   @override
@@ -33,10 +38,12 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
     super.initState();
     _tripNameCtrl = TextEditingController(text: widget.initialBudget.tripName);
     _budgetCapCtrl = TextEditingController(
-      text: widget.initialBudget.capAmount.toStringAsFixed(2),
+      text: widget.initialBudget.capAmount > 0
+          ? widget.initialBudget.capAmount.toInt().toString()
+          : '',
     );
-    _startDate = widget.initialBudget.startDate ?? 'Oct 12, 2026';
-    _endDate = widget.initialBudget.endDate ?? 'Oct 18, 2026';
+    _startDate = widget.initialBudget.parsedStartDate;
+    _endDate = widget.initialBudget.parsedEndDate;
     _allocatedSoFar = widget.initialBudget.allocatedSoFar;
 
     _budgetCapCtrl.addListener(() {
@@ -51,25 +58,81 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
     super.dispose();
   }
 
+  bool get _hasDateError {
+    if (_startDate != null && _endDate != null) {
+      final start = DateTime(_startDate!.year, _startDate!.month, _startDate!.day);
+      final end = DateTime(_endDate!.year, _endDate!.month, _endDate!.day);
+      return end.isBefore(start);
+    }
+    return false;
+  }
+
+  String? get _dateErrorText {
+    if (_hasDateError) {
+      return 'End date must be on or after start date';
+    }
+    return null;
+  }
+
+  Future<void> _pickStartDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _startDate ?? now,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+    );
+    if (picked != null) {
+      setState(() {
+        _startDate = picked;
+      });
+    }
+  }
+
+  Future<void> _pickEndDate() async {
+    final now = DateTime.now();
+    final initial = _endDate ?? _startDate ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+    );
+    if (picked != null) {
+      setState(() {
+        _endDate = picked;
+      });
+    }
+  }
+
   double get _currentCap {
-    final parsed = double.tryParse(_budgetCapCtrl.text.trim());
-    return (parsed != null && parsed > 0) ? parsed : widget.initialBudget.capAmount;
+    final parsed = parsePkr(_budgetCapCtrl.text.trim());
+    return parsed ?? widget.initialBudget.capAmount;
   }
 
   void _stepBudget(double delta) {
     final current = _currentCap;
-    final next = (current + delta).clamp(10.0, 50000.0);
-    _budgetCapCtrl.text = next.toStringAsFixed(2);
+    final next = (current + delta).clamp(0.0, kMaxPkrAmount);
+    _budgetCapCtrl.text = next.toInt().toString();
   }
 
   void _saveBudget() {
+    if (_hasDateError) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('End date must be on or after start date'),
+          backgroundColor: AppColors.alertRed,
+        ),
+      );
+      return;
+    }
     final updated = widget.initialBudget.copyWith(
       tripName: _tripNameCtrl.text.trim().isNotEmpty
           ? _tripNameCtrl.text.trim()
           : widget.initialBudget.tripName,
       capAmount: _currentCap,
-      startDate: _startDate,
-      endDate: _endDate,
+      startDate: _startDate != null ? formatTripDate(_startDate!) : null,
+      endDate: _endDate != null ? formatTripDate(_endDate!) : null,
       allocatedSoFar: _allocatedSoFar,
     );
     Navigator.of(context).pop(updated);
@@ -93,7 +156,7 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
             const SizedBox(width: 8),
             Flexible(
               child: Text(
-                'Target Ceiling',
+                'Ceiling (PKR)',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: AppTextStyles.overline,
@@ -117,9 +180,9 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Text(
-                '\$',
+                'Rs',
                 style: GoogleFonts.manrope(
-                  fontSize: 26,
+                  fontSize: 22,
                   fontWeight: FontWeight.w800,
                   color: AppColors.mutedText,
                 ),
@@ -137,6 +200,7 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                   ),
                   cursorColor: AppColors.tacticalOrange,
                   decoration: const InputDecoration(
+                    hintText: '0',
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
@@ -251,45 +315,63 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                         children: [
                           // Start Date
                           Expanded(
-                            child: InsetTile(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                children: [
-                                  const IconTile(
-                                    icon: Icons.calendar_today_rounded,
-                                    size: 28,
-                                    iconSize: 14,
-                                    isInset: false,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'START',
-                                          style: AppTextStyles.overline.copyWith(
-                                            fontSize: 8.5,
-                                          ),
-                                        ),
-                                        Text(
-                                          _startDate,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.manrope(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.darkCharcoal,
-                                          ),
-                                        ),
-                                      ],
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _pickStartDate,
+                              child: InsetTile(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    const IconTile(
+                                      icon: Icons.calendar_today_rounded,
+                                      size: 28,
+                                      iconSize: 14,
+                                      isInset: false,
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'START',
+                                            style: AppTextStyles.overline.copyWith(
+                                              fontSize: 8.5,
+                                            ),
+                                          ),
+                                          Text(
+                                            _startDate != null
+                                                ? formatTripDate(_startDate!)
+                                                : 'Select start',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.manrope(
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: _startDate != null
+                                                  ? AppColors.darkCharcoal
+                                                  : AppColors.mutedText,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (_startDate != null)
+                                      GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () => setState(() => _startDate = null),
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(left: 4),
+                                          child: Icon(Icons.close_rounded,
+                                              size: 14, color: AppColors.mutedText),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -297,50 +379,89 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
 
                           // End Date
                           Expanded(
-                            child: InsetTile(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                children: [
-                                  const IconTile(
-                                    icon: Icons.event_available_rounded,
-                                    size: 28,
-                                    iconSize: 14,
-                                    isInset: false,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'END',
-                                          style: AppTextStyles.overline.copyWith(
-                                            fontSize: 8.5,
-                                          ),
-                                        ),
-                                        Text(
-                                          _endDate,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: GoogleFonts.manrope(
-                                            fontSize: 11.5,
-                                            fontWeight: FontWeight.w700,
-                                            color: AppColors.darkCharcoal,
-                                          ),
-                                        ),
-                                      ],
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _pickEndDate,
+                              child: InsetTile(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    const IconTile(
+                                      icon: Icons.event_available_rounded,
+                                      size: 28,
+                                      iconSize: 14,
+                                      isInset: false,
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'END',
+                                            style: AppTextStyles.overline.copyWith(
+                                              fontSize: 8.5,
+                                            ),
+                                          ),
+                                          Text(
+                                            _endDate != null
+                                                ? formatTripDate(_endDate!)
+                                                : 'Select end',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.manrope(
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w700,
+                                              color: _endDate != null
+                                                  ? AppColors.darkCharcoal
+                                                  : AppColors.mutedText,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (_endDate != null)
+                                      GestureDetector(
+                                        behavior: HitTestBehavior.opaque,
+                                        onTap: () => setState(() => _endDate = null),
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(left: 4),
+                                          child: Icon(Icons.close_rounded,
+                                              size: 14, color: AppColors.mutedText),
+                                        ),
+                                      ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ],
                       ),
+                      if (_hasDateError) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              size: 14,
+                              color: AppColors.alertRed,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _dateErrorText!,
+                              style: GoogleFonts.manrope(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.alertRed,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -365,10 +486,12 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          const StatusChip(
-                            label: 'Healthy Margin',
-                            variant: StatusChipVariant.success,
-                            padding: EdgeInsets.symmetric(
+                          StatusChip(
+                            label: underBudget < 0 ? 'Over budget' : 'Healthy Margin',
+                            variant: underBudget < 0
+                                ? StatusChipVariant.danger
+                                : StatusChipVariant.success,
+                            padding: const EdgeInsets.symmetric(
                               horizontal: 8,
                               vertical: 3,
                             ),
@@ -386,7 +509,7 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                             ),
                           ),
                           Text(
-                            '\$${_allocatedSoFar.toStringAsFixed(2)}',
+                            formatPkr(_allocatedSoFar),
                             style: GoogleFonts.manrope(
                               fontSize: 15,
                               fontWeight: FontWeight.w800,
@@ -394,7 +517,7 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                             ),
                           ),
                           Text(
-                            ' of \$${cap.toStringAsFixed(2)}',
+                            ' of ${formatPkr(cap)}',
                             style: AppTextStyles.bodySecondary.copyWith(
                               fontSize: 13,
                             ),
@@ -406,36 +529,54 @@ class _EditTripBudgetScreenState extends State<EditTripBudgetScreen> {
                         borderRadius:
                             BorderRadius.circular(AppColors.radiusPill),
                         child: LinearProgressIndicator(
-                          value: ratio,
+                          value: underBudget < 0 ? 1.0 : ratio,
                           minHeight: 8,
                           backgroundColor: AppColors.clayDark,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            AppColors.tacticalOrange,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            underBudget < 0
+                                ? AppColors.alertRed
+                                : AppColors.tacticalOrange,
                           ),
                         ),
                       ),
                       const SizedBox(height: 10),
-                      Wrap(
-                        alignment: WrapAlignment.spaceBetween,
-                        runSpacing: 4,
-                        children: [
-                          Text(
-                            'Under budget by \$${underBudget > 0 ? underBudget.toStringAsFixed(2) : '0.00'}',
-                            style: GoogleFonts.manrope(
-                              color: AppColors.statusGreen,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
+                      if (underBudget < 0) ...[
+                        Text(
+                          'Over budget by ${formatPkr(-underBudget)}',
+                          style: GoogleFonts.manrope(
+                            color: AppColors.alertRed,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
                           ),
-                          Text(
-                            '${remainingPct.toStringAsFixed(1)}% remaining',
-                            style: AppTextStyles.caption.copyWith(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
+                        ),
+                      ] else ...[
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                underBudget > 0
+                                    ? 'Under budget by ${formatPkr(underBudget)}'
+                                    : 'On budget',
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.manrope(
+                                  color: AppColors.statusGreen,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${remainingPct.toStringAsFixed(1)}% remaining',
+                              style: AppTextStyles.caption.copyWith(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

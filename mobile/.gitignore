@@ -46,3 +46,23 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Code Review Reports
+CODE_REVIEW_REPORT.md
+
+# Environment Variables & Secrets
+.env
+*.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.jks
+*.keystore
+**/key.properties
+**/local.properties
+key.properties
+local.properties
+SECRETS.md
+secrets.md

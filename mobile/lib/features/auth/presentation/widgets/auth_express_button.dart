@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/auth_colors.dart';
 
-/// "Biometric / Helmet Token" express tap button
+/// "Quick Sign In" express tap button
 class AuthExpressButton extends StatefulWidget {
   const AuthExpressButton({
     required this.onTap,
     super.key,
-    this.label = 'Biometric / Helmet Token',
+    this.label = 'Quick Sign In',
     this.isLoading = false,
   });
 
@@ -57,7 +57,7 @@ class _AuthExpressButtonState extends State<AuthExpressButton> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const Icon(
-                        Icons.fingerprint_rounded,
+                        Icons.bolt_rounded,
                         color: Color(0xFFD4CDC6),
                         size: 20,
                       ),

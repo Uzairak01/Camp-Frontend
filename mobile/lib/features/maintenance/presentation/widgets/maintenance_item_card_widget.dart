@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/utils/currency_formatter.dart';
 import '../../../../core/widgets/widgets.dart';
 import '../../domain/maintenance_item_model.dart';
 
@@ -11,15 +12,77 @@ class MaintenanceItemCardWidget extends StatelessWidget {
   const MaintenanceItemCardWidget({
     required this.item,
     super.key,
-    this.onActionPressed,
     this.onTap,
   });
 
   final MaintenanceItem item;
-  final VoidCallback? onActionPressed;
   final VoidCallback? onTap;
 
+  static String _formatThousands(int num) {
+    final str = num.toString();
+    final reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
+    return str.replaceAllMapped(reg, (Match m) => '${m[1]},');
+  }
+
+  String _formatConditionNote(MaintenanceItem item) {
+    final note = item.conditionNote;
+    if (note == null || note.isEmpty) {
+      if (item.status == MaintenanceStatus.dueSoon) return 'Due soon';
+      if (item.status == MaintenanceStatus.overdue) return 'Maintenance due';
+      return '';
+    }
+
+    final trimmed = note.trim();
+    final dueSoonReg = RegExp(r'^Due soon\s*[•:]\s*(.*)$', caseSensitive: false);
+    final match = dueSoonReg.firstMatch(trimmed);
+    if (match != null) {
+      final rawVal = match.group(1)?.trim() ?? '';
+      if (rawVal.isEmpty) return 'Due soon';
+
+      final plainNum = int.tryParse(rawVal.replaceAll(',', '').replaceAll(' ', ''));
+      if (plainNum != null) {
+        final formattedNum = _formatThousands(plainNum);
+        if (item.dueDate != null && item.dueDate!.isNotEmpty) {
+          return 'Due soon • in $formattedNum days';
+        } else {
+          return 'Due soon • in $formattedNum km';
+        }
+      }
+
+      final kmReg = RegExp(r'^(?:in\s+)?(\d[\d,]*)\s*km$', caseSensitive: false);
+      final kmMatch = kmReg.firstMatch(rawVal);
+      if (kmMatch != null) {
+        final n = int.tryParse(kmMatch.group(1)!.replaceAll(',', ''));
+        if (n != null) {
+          return 'Due soon • in ${_formatThousands(n)} km';
+        }
+      }
+
+      final daysReg = RegExp(r'^(?:in\s+)?(\d[\d,]*)\s*days?$', caseSensitive: false);
+      final daysMatch = daysReg.firstMatch(rawVal);
+      if (daysMatch != null) {
+        final n = int.tryParse(daysMatch.group(1)!.replaceAll(',', ''));
+        if (n != null) {
+          return 'Due soon • in ${_formatThousands(n)} days';
+        }
+      }
+    }
+
+    return trimmed;
+  }
+
   Widget _buildStatusValueWidget() {
+    if (item.cost != null && item.cost! > 0) {
+      return Text(
+        formatPkr(item.cost!),
+        style: GoogleFonts.manrope(
+          color: AppColors.darkCharcoal,
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+        ),
+      );
+    }
+
     final val = item.statusValueDisplay ?? '';
     if (val == 'OK') {
       return const StatusChip(
@@ -42,13 +105,23 @@ class MaintenanceItemCardWidget extends StatelessWidget {
           fontWeight: FontWeight.w800,
         ),
       );
-    } else {
+    } else if (val.isNotEmpty && !val.contains(r'$')) {
       return Text(
         val,
         style: GoogleFonts.manrope(
           color: AppColors.darkCharcoal,
           fontSize: 14,
           fontWeight: FontWeight.w800,
+        ),
+      );
+    } else {
+      return Text(
+        'Add your cost',
+        style: GoogleFonts.manrope(
+          color: AppColors.mutedText,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          fontStyle: FontStyle.italic,
         ),
       );
     }
@@ -111,6 +184,8 @@ class MaintenanceItemCardWidget extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 4),
+                    BikeLabelChip(bikeId: item.bikeId),
                     if (item.subtitle != null) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -134,97 +209,67 @@ class MaintenanceItemCardWidget extends StatelessWidget {
           ),
 
           // ── Bottom Warning / Condition Row ────────────────────────────────
-          if (item.conditionNote != null ||
-              item.actionLabel != null ||
-              item.trailingNote != null) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSuccess
-                    ? const Color(0xFFDCFCE7).withValues(alpha: 0.5)
-                    : const Color(0xFFFFEDD5).withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
+          Builder(
+            builder: (context) {
+              final conditionText = _formatConditionNote(item);
+              if (conditionText.isEmpty && item.trailingNote == null) {
+                return const SizedBox.shrink();
+              }
+              return Column(
                 children: [
-                  Icon(
-                    isSuccess
-                        ? Icons.check_circle_outline_rounded
-                        : Icons.warning_amber_rounded,
-                    size: 14,
-                    color: isSuccess
-                        ? AppColors.statusGreen
-                        : AppColors.tacticalOrangeDark,
-                  ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      item.conditionNote ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.manrope(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: isSuccess
-                            ? AppColors.statusGreen
-                            : AppColors.tacticalOrangeDark,
-                      ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isSuccess
+                          ? const Color(0xFFDCFCE7).withValues(alpha: 0.5)
+                          : const Color(0xFFFFEDD5).withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                  ),
-
-                  // Trailing "View Guide" action button OR Trailing Note
-                  if (item.actionLabel != null)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: onActionPressed ??
-                          () {
-                            ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Opening Guide for ${item.name}...',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                backgroundColor: AppColors.darkCharcoal,
-                                behavior: SnackBarBehavior.floating,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                duration: const Duration(milliseconds: 1500),
-                              ),
-                            );
-                          },
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: Text(
-                          item.actionLabel!,
-                          style: GoogleFonts.manrope(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.tacticalOrangeDark,
-                            decoration: TextDecoration.underline,
-                            decorationColor: AppColors.tacticalOrangeDark,
+                    child: Row(
+                      children: [
+                        Icon(
+                          isSuccess
+                              ? Icons.check_circle_outline_rounded
+                              : Icons.warning_amber_rounded,
+                          size: 14,
+                          color: isSuccess
+                              ? AppColors.statusGreen
+                              : AppColors.tacticalOrangeDark,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            conditionText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.manrope(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: isSuccess
+                                  ? AppColors.statusGreen
+                                  : AppColors.tacticalOrangeDark,
+                            ),
                           ),
                         ),
-                      ),
-                    )
-                  else if (item.trailingNote != null)
-                    Text(
-                      item.trailingNote!,
-                      style: GoogleFonts.manrope(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.mutedText,
-                      ),
+                        if (item.trailingNote != null)
+                          Text(
+                            item.trailingNote!,
+                            style: GoogleFonts.manrope(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: isSuccess
+                                  ? AppColors.statusGreen
+                                  : AppColors.tacticalOrangeDark,
+                            ),
+                          ),
+                      ],
                     ),
+                  ),
                 ],
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         ],
       ),
     );

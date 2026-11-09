@@ -1,12 +1,25 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/widgets/widgets.dart';
-import '../../../auth/controllers/auth_controller.dart';
+import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../maintenance/controllers/maintenance_controller.dart';
+import '../../../navigation/controllers/current_place_controller.dart';
+import '../../controllers/profile_controller.dart';
+import '../../domain/weather_service.dart';
 
-/// Dark Rider Banner wrapped in a soft tactile bezel ring — Cockpit Hero Card
-class CockpitStatusCardWidget extends StatelessWidget {
+/// Dark Rider Banner wrapped in a soft tactile bezel ring — Cockpit Hero Card.
+/// Single source of truth: reads from [ProfileController], [ActiveBikeController],
+/// and [CurrentPlaceController].
+/// Displays live clock (minute timer), shared location label from [CurrentPlaceController],
+/// and weather data from [WeatherProvider].
+class CockpitStatusCardWidget extends StatefulWidget {
+  /// Creates a [CockpitStatusCardWidget] hero card.
   const CockpitStatusCardWidget({
     super.key,
     this.avatarUrl,
@@ -14,23 +27,149 @@ class CockpitStatusCardWidget extends StatelessWidget {
     this.onProfilePressed,
   });
 
+  /// Remote image URL for the rider's avatar.
   final String? avatarUrl;
+
+  /// Callback when the primary Cockpit CTA is pressed.
   final VoidCallback? onCtaPressed;
+
+  /// Callback when the rider avatar is tapped to open profile.
   final VoidCallback? onProfilePressed;
+
+  @override
+  State<CockpitStatusCardWidget> createState() => _CockpitStatusCardWidgetState();
+}
+
+class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
+  Timer? _minuteTimer;
+  String _timeString = '';
+  WeatherData? _weatherData;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTime();
+    _minuteTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _updateTime();
+    });
+    _fetchWeather();
+  }
+
+  @override
+  void dispose() {
+    _minuteTimer?.cancel();
+    super.dispose();
+  }
+
+  void _updateTime() {
+    final now = DateTime.now();
+    final hour = now.hour == 0 ? 12 : (now.hour > 12 ? now.hour - 12 : now.hour);
+    final minute = now.minute.toString().padLeft(2, '0');
+    final ampm = now.hour >= 12 ? 'PM' : 'AM';
+    final formatted = '$hour:$minute $ampm';
+    if (!mounted) {
+      _timeString = formatted;
+      return;
+    }
+    if (_timeString != formatted) {
+      setState(() {
+        _timeString = formatted;
+      });
+    }
+  }
+
+  /// Fetches weather for the rider's current or last known position.
+  /// Does not perform its own geocoding; location naming is owned by [CurrentPlaceController].
+  Future<void> _fetchWeather() async {
+    try {
+      final pos = CurrentPlaceController.instance.lastKnownPosition;
+      final lat = pos?.latitude ?? 33.6844;
+      final lon = pos?.longitude ?? 73.0479;
+
+      // Sync the shared location label to WeatherProvider
+      WeatherProvider.currentLocationLabel =
+          CurrentPlaceController.instance.displayLabel;
+
+      final weather = await WeatherProvider.service.getWeather(
+        latitude: lat,
+        longitude: lon,
+      );
+      if (mounted) {
+        setState(() {
+          _weatherData = weather;
+        });
+      }
+    } catch (_) {
+      // Gracefully retain weather unavailable state
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: AuthController.instance,
+      listenable: Listenable.merge([
+        ProfileController.instance,
+        ActiveBikeController.instance,
+        MaintenanceController.instance,
+        CurrentPlaceController.instance,
+      ]),
       builder: (context, _) {
-        final riderName = AuthController.instance.riderDisplayName;
-        final riderFirstName = AuthController.instance.riderFirstName;
+        final profile = ProfileController.instance;
+        final riderName = profile.fullName;
+        final riderFirstName = profile.firstName;
+        final activeBike = ActiveBikeController.instance.activeBike;
+        final currentPlace = CurrentPlaceController.instance;
+        final locationLabel = currentPlace.displayLabel;
+
+        // Keep WeatherProvider synchronized with the shared place label
+        WeatherProvider.currentLocationLabel = locationLabel;
+
+        Widget avatarWidget;
+        if (profile.avatarPath != null && profile.avatarPath!.isNotEmpty) {
+          final file = File(profile.avatarPath!);
+          if (file.existsSync()) {
+            avatarWidget = ClipOval(
+              child: Image.file(file, width: 52, height: 52, fit: BoxFit.cover),
+            );
+          } else {
+            avatarWidget = Center(
+              child: Text(
+                riderFirstName.isNotEmpty ? riderFirstName[0] : 'R',
+                style: GoogleFonts.manrope(
+                  color: const Color(0xFFFDE68A),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            );
+          }
+        } else if (widget.avatarUrl != null) {
+          avatarWidget = CircleAvatar(
+            radius: 26,
+            backgroundImage: NetworkImage(widget.avatarUrl!),
+          );
+        } else {
+          avatarWidget = Center(
+            child: Text(
+              riderFirstName.isNotEmpty ? riderFirstName : 'Rider',
+              style: GoogleFonts.manrope(
+                color: const Color(0xFFFDE68A),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          );
+        }
+
+        final weatherText = _weatherData != null
+            ? '${_weatherData!.tempInt}° • ${_weatherData!.condition}'
+            : 'Weather unavailable';
 
         return CockpitHeroCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Top Section: Avatar + Rider Info + ONLINE pill ───────────────
+              // ── Top Section: Avatar + Rider Info ─────────────────────────────
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
                 child: Row(
@@ -38,7 +177,7 @@ class CockpitStatusCardWidget extends StatelessWidget {
                   children: [
                     // Avatar
                     GestureDetector(
-                      onTap: onProfilePressed,
+                      onTap: widget.onProfilePressed,
                       child: Stack(
                         clipBehavior: Clip.none,
                         children: [
@@ -47,183 +186,251 @@ class CockpitStatusCardWidget extends StatelessWidget {
                             height: 52,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              border: Border.all(color: AppColors.statusYellow, width: 2.5),
+                              border: Border.all(
+                                color: AppColors.statusYellow,
+                                width: 2.5,
+                              ),
                               gradient: const LinearGradient(
                                 colors: [Color(0xFF4A3223), Color(0xFF2B1A10)],
                               ),
                             ),
-                            child: Center(
-                              child: avatarUrl != null
-                                  ? CircleAvatar(radius: 26, backgroundImage: NetworkImage(avatarUrl!))
-                                  : Text(
-                                      riderFirstName,
-                                      style: GoogleFonts.manrope(
-                                        color: const Color(0xFFFDE68A),
-                                        fontSize: 12.5,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                            ),
+                            child: avatarWidget,
                           ),
-                      Positioned(
-                        bottom: -1,
-                        right: -1,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF0F172A)),
-                          child: const Icon(Icons.check_circle_rounded, size: 13, color: AppColors.statusYellow),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(width: 12),
-
-                // Rider info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              riderName,
-                              style: GoogleFonts.manrope(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                            decoration: BoxDecoration(color: const Color(0xFF5A391D), borderRadius: BorderRadius.circular(10)),
-                            child: Text(
-                              'ADV PRO',
-                              style: GoogleFonts.manrope(
-                                color: const Color(0xFFFCD34D),
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 0.5,
+                          Positioned(
+                            bottom: -1,
+                            right: -1,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Color(0xFF0F172A),
+                              ),
+                              child: const Icon(
+                                Icons.check_circle_rounded,
+                                size: 13,
+                                color: AppColors.statusYellow,
                               ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'Cockpit Link Active',
-                        style: GoogleFonts.manrope(color: const Color(0xFF94A3B8), fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+
+                    const SizedBox(width: 12),
+
+                    // Rider info
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            riderName,
+                            style: GoogleFonts.manrope(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 3),
+                          Builder(
+                            builder: (context) {
+                              if (activeBike == null) {
+                                return Text(
+                                  'No Active Motorcycle',
+                                  style: GoogleFonts.manrope(
+                                    color: const Color(0xFF94A3B8),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                );
+                              }
+                              final hasData = MaintenanceController.instance.hasMaintenanceData(activeBike);
+                              String bikeLine = 'Active Rig • ${activeBike.name}';
+                              if (hasData) {
+                                final dueCount = MaintenanceController.instance.countDueItems(activeBike.id);
+                                final status = dueCount > 0
+                                    ? '$dueCount ${dueCount == 1 ? 'item' : 'items'} due'
+                                    : 'All up to date';
+                                bikeLine = 'Active Rig • ${activeBike.name} • $status';
+                              }
+                              return Text(
+                                bikeLine,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.manrope(
+                                  color: const Color(0xFF94A3B8),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-
-                // ONLINE pill
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF14241B),
-                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                    border: Border.all(color: AppColors.statusGreen.withValues(alpha: 0.4), width: 1),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.statusGreen,
-                          boxShadow: [BoxShadow(color: AppColors.statusGreen.withValues(alpha: 0.6), blurRadius: 6)],
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text('ONLINE', style: GoogleFonts.manrope(color: AppColors.statusGreen, fontSize: 10, fontWeight: FontWeight.w900)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Status Tag Pills ─────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _darkPill(Icons.access_time_rounded, '08:42 AM'),
-                _darkPill(Icons.satellite_alt_rounded, 'GPS Locked, Lahore'),
-                _darkPill(Icons.wb_sunny_rounded, 'Sunny 22 °C • 4 km/h NW'),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 14),
-
-          // ── CTA Banner ───────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-              decoration: BoxDecoration(
-                color: AppColors.cockpitBannerBg,
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.06), width: 1),
               ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+
+              // ── Status Tag Pills: Time, Location, Weather, Distance ───────
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final maxPillWidth = constraints.maxWidth;
+                    return Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
                       children: [
-                        Text(
-                          'Ready for the Ridge Pass?',
-                          style: GoogleFonts.manrope(color: Colors.white, fontSize: 15.5, fontWeight: FontWeight.w800),
+                        _darkPill(
+                          Icons.access_time_rounded,
+                          _timeString,
+                          maxWidth: maxPillWidth,
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Ideal riding conditions on Alpine Route 4',
-                          style: GoogleFonts.manrope(color: const Color(0xFFD1D5DB), fontSize: 12, fontWeight: FontWeight.w500),
+                        _darkPill(
+                          Icons.location_on_rounded,
+                          locationLabel,
+                          maxWidth: maxPillWidth,
+                          onTap: currentPlace.isLocationOff
+                              ? () => currentPlace.showLocationOffHint(context)
+                              : () => Navigator.of(context)
+                                  .pushNamed(CampRoutes.navigationMap),
+                        ),
+                        _darkPill(
+                          Icons.wb_sunny_rounded,
+                          weatherText,
+                          maxWidth: maxPillWidth,
+                          onTap: () => Navigator.of(context)
+                              .pushNamed(CampRoutes.weatherDetail),
+                        ),
+                        if (activeBike != null)
+                          _darkPill(
+                            Icons.two_wheeler_rounded,
+                            '${activeBike.odometerKm} km logged',
+                            maxWidth: maxPillWidth,
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // ── CTA Banner ───────────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: GestureDetector(
+                  onTap: widget.onCtaPressed,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFE89A3C), Color(0xFFD48226)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFD48226).withValues(alpha: 0.35),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.navigation_rounded,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'CAMP NAVIGATION',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                              Text(
+                                'Explore offline routes & topo maps',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 13,
+                          color: Colors.white,
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  IconButton(
-                    onPressed: onCtaPressed,
-                    icon: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [AppColors.tacticalOrangeLight, AppColors.tacticalOrange, AppColors.tacticalOrangeDark],
-                        ),
-                        boxShadow: AppColors.orangeGlow,
-                      ),
-                      child: const Center(child: Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20)),
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
-  },
-);
   }
 
-  Widget _darkPill(IconData icon, String label) => Container(
+  Widget _darkPill(
+    IconData icon,
+    String label, {
+    VoidCallback? onTap,
+    double? maxWidth,
+  }) {
+    // Retain full place label in the Semantics tree for screen readers
+    // even when visually truncated with ellipsis.
+    final textWidget = Semantics(
+      label: label,
+      child: Text(
+        label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: GoogleFonts.manrope(
+          color: const Color(0xFFE5E7EB),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+
+    Widget buildPill(BoxConstraints constraints) {
+      final effectiveMaxWidth = (maxWidth != null && maxWidth.isFinite)
+          ? maxWidth
+          : (constraints.maxWidth.isFinite ? constraints.maxWidth : null);
+
+      return Container(
+        constraints: effectiveMaxWidth != null
+            ? BoxConstraints(maxWidth: effectiveMaxWidth)
+            : null,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: 0.3),
@@ -235,14 +442,28 @@ class CockpitStatusCardWidget extends StatelessWidget {
           children: [
             Icon(icon, size: 13, color: AppColors.statusYellow),
             const SizedBox(width: 6),
-            Text(
-              label,
-              maxLines: 1,
-              softWrap: false,
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.manrope(color: const Color(0xFFE5E7EB), fontSize: 11, fontWeight: FontWeight.w600),
-            ),
+            if (effectiveMaxWidth != null)
+              Flexible(child: textWidget)
+            else
+              textWidget,
           ],
         ),
       );
+    }
+
+    final pillContent = maxWidth != null
+        ? buildPill(BoxConstraints(maxWidth: maxWidth))
+        : LayoutBuilder(
+            builder: (context, constraints) => buildPill(constraints),
+          );
+
+    if (onTap != null) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: pillContent,
+      );
+    }
+    return pillContent;
+  }
 }

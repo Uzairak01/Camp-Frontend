@@ -1,16 +1,29 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/routes.dart';
 import '../../../../app/theme/app_colors.dart';
 import '../../../../app/theme/app_theme.dart';
+import '../../../../core/data/app_repositories.dart';
 import '../../../../core/widgets/widgets.dart';
 import '../../../auth/controllers/auth_controller.dart';
+import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../garage/domain/bike_model.dart';
+import '../../../maintenance/controllers/post_ride_report_controller.dart';
+import '../../../maintenance/domain/maintenance_item_model.dart';
+import '../../../maintenance/domain/post_ride_report.dart';
+import '../../../settings/controllers/settings_controller.dart';
+import '../../controllers/profile_controller.dart';
+import '../../domain/emergency_phone_helper.dart';
+import '../../domain/profile_stats.dart';
 import '../widgets/app_drawer_widget.dart';
-import '../widgets/tactical_bottom_dock_widget.dart';
 
 /// CAMP Rider Profile Screen
-/// High-fidelity skeuomorphic cockpit profile displaying telemetry records,
+/// High-fidelity skeuomorphic cockpit profile displaying rider profile,
 /// touring tiers, trail badges, garage fleet, health status, and settings.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -21,6 +34,25 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  List<MaintenanceItem> _maintenanceItems = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMaintenanceItems();
+  }
+
+  Future<void> _loadMaintenanceItems() async {
+    try {
+      final items = await AppRepositories.instance.maintenanceRepository.loadMaintenanceItems();
+      if (mounted) {
+        setState(() {
+          _maintenanceItems = items;
+        });
+      }
+    } catch (_) {}
+  }
 
   /// Navigation height constants for strict anti-overlap calculation:
   /// CampBottomNav container height (48 + 16 = 64px) + floating bottom margin (24px) + clearance (32px) = 120px
@@ -79,29 +111,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     // 1. Top Header Bar (Circular Back, CAMP with orange dot, PROFILE pill)
                     CampAppBar(
                       leading: CampAppBarLeading.back,
-                      titleWidget: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            'CAMP',
-                            style: GoogleFonts.manrope(
-                              color: AppColors.darkCharcoal,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          Container(
-                            width: 7,
-                            height: 7,
-                            decoration: const BoxDecoration(
-                              color: AppColors.tacticalOrange,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                        ],
-                      ),
                       actionWidget: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                         decoration: BoxDecoration(
@@ -142,18 +151,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                     const SizedBox(height: AppColors.cardGap),
 
-                    // 3. Stat Cards (2x2 Grid)
-                    _buildStatsGrid(),
-
-                    const SizedBox(height: AppColors.cardGap),
-
-                    // 4. Touring Tier Progress
-                    _buildTouringTierCard(),
-
-                    const SizedBox(height: AppColors.cardGap),
-
-                    // 5. Earned Trail Badges
-                    _buildTrailBadgesSection(),
+                    // 3, 4, 5. Stat Cards, Touring Tier Progress, and Trail Badges
+                    ListenableBuilder(
+                      listenable: PostRideReportController.instance,
+                      builder: (context, _) {
+                        return Column(
+                          children: [
+                            _buildStatsGrid(),
+                            const SizedBox(height: AppColors.cardGap),
+                            _buildTouringTierCard(),
+                            const SizedBox(height: AppColors.cardGap),
+                            _buildTrailBadgesSection(),
+                          ],
+                        );
+                      },
+                    ),
 
                     const SizedBox(height: AppColors.cardGap),
 
@@ -189,18 +201,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
 
-            // ── Floating Bottom Dock (Index 4: Profile Active) ───────────────
-            Positioned(
+            // ── Floating Bottom Dock (Index 5: Profile Active) ───────────────
+            const Positioned(
               left: 0,
               right: 0,
               bottom: _kNavBottomMargin,
               child: Center(
-                child: TacticalBottomDockWidget(
-                  selectedIndex: 4, // Profile tab active
-                  onIndexChanged: (index) {
-                    if (index == 4) return;
-                    CampBottomNav.navigateToTab(context, index, currentIndex: 4);
-                  },
+                child: CampBottomNav(
+                  selected: CampTab.profile,
                 ),
               ),
             ),
@@ -212,63 +220,65 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 2. Cockpit Hero Card ───────────────────────────────────────────────────
   Widget _buildCockpitHeroCard() {
-    return CockpitHeroCard(
+    return ListenableBuilder(
+      listenable: Listenable.merge([ProfileController.instance, ActiveBikeController.instance]),
+      builder: (context, _) {
+        final profile = ProfileController.instance;
+        final avatarPath = profile.avatarPath;
+        final displayName = profile.fullName.isNotEmpty ? profile.fullName : 'Welcome back';
+        final firstName = profile.firstName;
+        final activeBike = ActiveBikeController.instance.activeBike;
+        final bikeSubtitle = activeBike != null
+            ? 'Cockpit Link Active • ${activeBike.name}'
+            : 'No bike added yet';
+        return CockpitHeroCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top section: Avatar + Info + Online badge
+          // Top section: Avatar + Info
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Avatar with orange border and verified badge
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: AppColors.tacticalOrange,
-                          width: 2.2,
-                        ),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFF4A3223), Color(0xFF2B1A10)],
-                        ),
-                      ),
-                      child: Center(
-                        child: Text(
-                          'Elena',
-                          style: GoogleFonts.manrope(
-                            color: const Color(0xFFFDE68A),
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w800,
+                // Avatar with orange border
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: AppColors.tacticalOrange,
+                      width: 2.2,
+                    ),
+                    gradient: avatarPath == null
+                        ? const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF4A3223), Color(0xFF2B1A10)],
+                          )
+                        : null,
+                  ),
+                  child: ClipOval(
+                    child: avatarPath != null && File(avatarPath).existsSync()
+                        ? Image.file(File(avatarPath), fit: BoxFit.cover)
+                        : Center(
+                            child: firstName.isNotEmpty
+                                ? Text(
+                                    firstName[0].toUpperCase(),
+                                    style: GoogleFonts.manrope(
+                                      color: const Color(0xFFFDE68A),
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.person_rounded,
+                                    color: Color(0xFFFDE68A),
+                                    size: 24,
+                                  ),
                           ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: -1,
-                      right: -1,
-                      child: Container(
-                        padding: const EdgeInsets.all(2),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Color(0xFF0F172A),
-                        ),
-                        child: const Icon(
-                          Icons.check_circle_rounded,
-                          size: 13,
-                          color: AppColors.statusYellow,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
                 const SizedBox(width: 14),
 
@@ -281,7 +291,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         children: [
                           Flexible(
                             child: Text(
-                              AuthController.instance.riderDisplayName,
+                              displayName,
                               style: GoogleFonts.manrope(
                                 color: Colors.white,
                                 fontSize: 17,
@@ -290,28 +300,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF5A391D),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              'ADV PRO',
-                              style: GoogleFonts.manrope(
-                                color: const Color(0xFFFCD34D),
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        'Cockpit Link Active • BMW R 1250 GS',
+                        bikeSubtitle,
                         style: GoogleFonts.manrope(
                           color: const Color(0xFF94A3B8),
                           fontSize: 12,
@@ -322,178 +315,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                   ),
                 ),
-
-                // Green ONLINE pill
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4.5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF14241B),
-                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                    border: Border.all(
-                      color: AppColors.statusGreen.withValues(alpha: 0.4),
-                      width: 1,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: AppColors.statusGreen,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.statusGreen.withValues(alpha: 0.6),
-                              blurRadius: 6,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        'ONLINE',
-                        style: GoogleFonts.manrope(
-                          color: AppColors.statusGreen,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Three Info Chips Row (Time, GPS, Weather)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _buildHeroDarkPill(Icons.access_time_rounded, '08:42 AM'),
-                _buildHeroDarkPill(Icons.satellite_alt_rounded, 'GPS Locked'),
-                _buildHeroDarkPill(Icons.wb_sunny_rounded, 'Sunny 68°F - 4mph NW'),
               ],
             ),
           ),
 
           const SizedBox(height: 14),
-
-          // "Ready for the Ridge Pass?" CTA Card
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-              decoration: BoxDecoration(
-                color: AppColors.cockpitBannerBg,
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Ready for the Ridge Pass?',
-                          style: GoogleFonts.manrope(
-                            color: Colors.white,
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          'Ideal riding conditions on Alpine Route 4',
-                          style: GoogleFonts.manrope(
-                            color: const Color(0xFFD1D5DB),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => Navigator.of(context).pushNamed('/mechanics/map'),
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            AppColors.tacticalOrangeLight,
-                            AppColors.tacticalOrange,
-                            AppColors.tacticalOrangeDark,
-                          ],
-                        ),
-                        boxShadow: AppColors.orangeGlow,
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.arrow_forward_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // Passport & Garmin InReach Labels
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Flexible(
-                  child: Text(
-                    'PASSPORT: CAMP-9942-GS',
-                    style: GoogleFonts.manrope(
-                      color: AppColors.tacticalOrangeLight,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.8,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    'GARMIN INREACH SYNC',
-                    style: GoogleFonts.manrope(
-                      color: const Color(0xFF94A3B8),
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 12),
 
           // Bottom Action Row: "Edit Profile" + QR Code Icon Button
           Padding(
@@ -503,7 +329,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Expanded(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () => Navigator.of(context).pushNamed('/edit-profile'),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.editProfile),
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       decoration: BoxDecoration(
@@ -539,7 +365,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(width: 10),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () => _showNotification('Rider Passport QR code generated'),
+                  onTap: () => Navigator.of(context).pushNamed(CampRoutes.emergencyQr),
                   child: Container(
                     width: 44,
                     height: 44,
@@ -566,39 +392,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
-  }
-
-  Widget _buildHeroDarkPill(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: AppColors.statusYellow),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
-            style: GoogleFonts.manrope(
-              color: const Color(0xFFE5E7EB),
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
+      },
     );
   }
 
   // ── 3. Stat Cards (2x2 Grid) ───────────────────────────────────────────────
   Widget _buildStatsGrid() {
+    final stats = ProfileStats(PostRideReportController.instance.reports);
+
+    final String distVal = stats.lifetimeDistanceDisplay;
+    final String distSub = stats.hasRides ? 'Lifetime distance' : 'No rides yet';
+
+    final String ridesVal = stats.ridesCountDisplay;
+    final String ridesSub = stats.hasRides
+        ? (stats.ridesCount == 1 ? '1 ride completed' : '${stats.ridesCount} rides completed')
+        : 'No rides yet';
+
+    final String saddleVal = stats.saddleTimeDisplay;
+    final String saddleSub = stats.hasRides ? 'Saddle time' : 'No rides yet';
+
+    final String longestVal = stats.longestRideDisplay;
+    final String longestUnit = stats.hasRides ? 'KM' : '';
+    final String longestSub = stats.hasRides ? 'Longest single ride' : 'No rides yet';
+
     return Column(
       children: [
         Row(
@@ -608,22 +424,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 title: 'LIFETIME DISTANCE',
                 icon: Icons.explore_outlined,
                 iconColor: AppColors.tacticalOrange,
-                statValue: '14,820',
+                statValue: distVal,
                 statUnit: 'KM',
                 isUnitOrange: true,
-                subtitle: 'Elev. +142,500m',
+                subtitle: distSub,
               ),
             ),
             const SizedBox(width: AppColors.cardGap),
             Expanded(
               child: _buildStatTile(
-                title: 'PASSES & REGIONS',
-                icon: Icons.landscape_outlined,
+                title: 'RIDES COMPLETED',
+                icon: Icons.route_rounded,
                 iconColor: AppColors.tacticalOrange,
-                statValue: '8',
-                statUnit: 'Regions',
+                statValue: ridesVal,
+                statUnit: stats.ridesCount == 1 ? 'Ride' : 'Rides',
                 isUnitOrange: false,
-                subtitle: 'Alps, Pyrenees, Balk.',
+                subtitle: ridesSub,
               ),
             ),
           ],
@@ -636,22 +452,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 title: 'SADDLE TIME',
                 icon: Icons.access_time_rounded,
                 iconColor: AppColors.mutedText,
-                statValue: '124',
-                statUnit: 'Days',
+                statValue: saddleVal,
+                statUnit: '',
                 isUnitOrange: false,
-                subtitle: '418 Active Hours',
+                subtitle: saddleSub,
               ),
             ),
             const SizedBox(width: AppColors.cardGap),
             Expanded(
               child: _buildStatTile(
-                title: 'LONGEST SINGLE DAY',
+                title: 'LONGEST SINGLE RIDE',
                 icon: Icons.bolt_rounded,
                 iconColor: AppColors.mutedText,
-                statValue: '780',
-                statUnit: 'KM',
+                statValue: longestVal,
+                statUnit: longestUnit,
                 isUnitOrange: true,
-                subtitle: 'TET Sector 04',
+                subtitle: longestSub,
               ),
             ),
           ],
@@ -716,15 +532,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   letterSpacing: -0.5,
                 ),
               ),
-              const SizedBox(width: 4),
-              Text(
-                statUnit,
-                style: GoogleFonts.manrope(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  color: isUnitOrange ? AppColors.tacticalOrange : AppColors.darkCharcoal,
+              if (statUnit.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text(
+                  statUnit,
+                  style: GoogleFonts.manrope(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: isUnitOrange ? AppColors.tacticalOrange : AppColors.darkCharcoal,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
           const SizedBox(height: 4),
@@ -744,6 +562,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 4. Touring Tier Progress ───────────────────────────────────────────────
   Widget _buildTouringTierCard() {
+    final stats = ProfileStats(PostRideReportController.instance.reports);
+    final tier = stats.currentTier;
+    final bool isTop = stats.isTopTier;
+
     return CampCard(
       padding: const EdgeInsets.all(AppColors.cardPadding),
       borderRadius: AppColors.radiusCard,
@@ -761,7 +583,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Level 4: Master Explorer',
+                tier.displayName,
                 style: GoogleFonts.manrope(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
@@ -775,7 +597,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(AppColors.radiusPill),
                 ),
                 child: Text(
-                  '78%',
+                  isTop ? 'TOP' : '${stats.tierProgressPercent}%',
                   style: GoogleFonts.manrope(
                     fontSize: 11,
                     fontWeight: FontWeight.w900,
@@ -794,7 +616,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: AppColors.clayDeep,
               child: FractionallySizedBox(
                 alignment: Alignment.centerLeft,
-                widthFactor: 0.78,
+                widthFactor: stats.tierProgressFraction.clamp(0.0, 1.0),
                 child: Container(
                   decoration: BoxDecoration(
                     color: AppColors.tacticalOrange,
@@ -810,7 +632,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               Flexible(
                 child: Text(
-                  'Current: 14,820 KM',
+                  'Current: ${stats.lifetimeDistanceDisplay} KM',
                   style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w600),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -818,7 +640,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Next Tier: 16,000 KM (1,180 KM to go)',
+                  isTop
+                      ? 'Top tier reached'
+                      : 'Next tier: ${stats.nextTier!.thresholdKm.round()} KM (${stats.kmToNextTier.round()} KM to go)',
                   style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w600),
                   textAlign: TextAlign.right,
                   overflow: TextOverflow.ellipsis,
@@ -833,27 +657,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 5. Earned Trail Badges ─────────────────────────────────────────────────
   Widget _buildTrailBadgesSection() {
-    final badges = [
-      {'title': 'Alps Explorer', 'icon': Icons.landscape_rounded, 'color': AppColors.tacticalOrange},
-      {'title': 'Iron Butt 1000k', 'icon': Icons.speed_rounded, 'color': AppColors.darkCharcoal},
-      {'title': 'Sand Dune Master', 'icon': Icons.person_pin_circle_outlined, 'color': AppColors.darkCharcoal},
-      {'title': 'Babusar Summit', 'icon': Icons.change_history_rounded, 'color': AppColors.darkCharcoal},
-      {'title': 'Off-Grid', 'icon': Icons.cell_tower_rounded, 'color': AppColors.darkCharcoal},
-    ];
+    final stats = ProfileStats(PostRideReportController.instance.reports);
+    final badges = stats.badges;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'EARNED TRAIL BADGES',
-          style: AppTextStyles.overline,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'EARNED TRAIL BADGES',
+              style: AppTextStyles.overline,
+            ),
+            Text(
+              '${stats.unlockedBadgeCount}/${badges.length} UNLOCKED',
+              style: GoogleFonts.manrope(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                color: AppColors.tacticalOrangeDark,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           physics: const BouncingScrollPhysics(),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: badges.map((b) {
+              final isUnlocked = b.isUnlocked;
               return Padding(
                 padding: const EdgeInsets.only(right: 14),
                 child: Column(
@@ -862,30 +697,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       width: 58,
                       height: 58,
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: isUnlocked ? Colors.white : AppColors.clayDark,
                         borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                        boxShadow: AppColors.skeuRaisedSmall,
+                        boxShadow: isUnlocked ? AppColors.skeuRaisedSmall : AppColors.skeuRecessed,
+                        border: isUnlocked
+                            ? Border.all(
+                                color: AppColors.tacticalOrange.withValues(alpha: 0.35),
+                                width: 1.2,
+                              )
+                            : Border.all(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                width: 1,
+                              ),
                       ),
                       child: Center(
                         child: Icon(
-                          b['icon'] as IconData,
+                          b.icon,
                           size: 26,
-                          color: b['color'] as Color,
+                          color: isUnlocked ? AppColors.tacticalOrange : AppColors.mutedLight,
                         ),
                       ),
                     ),
                     const SizedBox(height: 7),
                     SizedBox(
-                      width: 72,
+                      width: 84,
                       child: Text(
-                        b['title'] as String,
+                        b.title,
                         textAlign: TextAlign.center,
                         maxLines: 2,
                         style: GoogleFonts.manrope(
                           fontSize: 10.5,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.darkCharcoal,
+                          color: isUnlocked ? AppColors.darkCharcoal : AppColors.mutedText,
                           height: 1.2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    SizedBox(
+                      width: 84,
+                      child: Text(
+                        b.requirementText,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        style: GoogleFonts.manrope(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                          color: isUnlocked ? AppColors.tacticalOrangeDark : AppColors.mutedLight,
+                          height: 1.1,
                         ),
                       ),
                     ),
@@ -901,547 +760,633 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 6. My Garage (Horizontal Bike Carousel) ────────────────────────────────
   Widget _buildMyGarageSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(
-          title: 'MY GARAGE',
-          actionWidget: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).pushNamed('/add-bike'),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.clay,
-                borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                border: Border.all(
-                  color: AppColors.tacticalOrange.withValues(alpha: 0.4),
-                  width: 1.2,
-                ),
-                boxShadow: AppColors.skeuRaisedSmall,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(
-                    Icons.camera_alt_outlined,
-                    size: 15,
-                    color: AppColors.tacticalOrange,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Recognize bike with camera',
-                    style: GoogleFonts.manrope(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.darkCharcoal,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          physics: const BouncingScrollPhysics(),
-          child: Row(
-            children: [
-              _buildBikeGarageCard(
-                model: 'BMW R 1250 GS Adv',
-                year: '2023',
-                mileage: '14,820 km',
-                statusLabel: 'Good',
-                isStatusGood: true,
-                footerLeading: 'Primary Ride',
-                footerTrailing: 'Active',
-                isPrimary: true,
-                imagePath: 'assets/images/bmw_r1250_scan_placeholder.jpg',
-              ),
-              const SizedBox(width: 14),
-              _buildBikeGarageCard(
-                model: 'Honda Rebel 500',
-                year: '2022',
-                mileage: '4,120 km',
-                statusLabel: 'Service Due',
-                isStatusGood: false,
-                footerLeading: 'Oil Due in 180km',
-                footerTrailing: '',
-                isPrimary: false,
-                imagePath: null,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+    return ListenableBuilder(
+      listenable: ActiveBikeController.instance,
+      builder: (context, _) {
+        final bikeController = ActiveBikeController.instance;
+        final bikes = bikeController.bikes;
+        final activeBike = bikeController.activeBike;
 
-  Widget _buildBikeGarageCard({
-    required String model,
-    required String year,
-    required String mileage,
-    required String statusLabel,
-    required bool isStatusGood,
-    required String footerLeading,
-    required String footerTrailing,
-    required bool isPrimary,
-    required String? imagePath,
-  }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => Navigator.of(context).pushNamed('/garage'),
-      child: Container(
-        width: 236,
-        padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.clay,
-        borderRadius: BorderRadius.circular(AppColors.radiusCard),
-        boxShadow: AppColors.skeuRaised,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Bike Image with top-right pill
-          Stack(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SectionHeader(
+              title: 'MY GARAGE',
+              actionWidget: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pushNamed(CampRoutes.addBike),
                 child: Container(
-                  height: 120,
-                  width: double.infinity,
-                  color: const Color(0xFFE2E8F0),
-                  child: imagePath != null
-                      ? Image.asset(
-                          imagePath,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => const Center(
-                            child: Icon(Icons.two_wheeler_rounded, size: 48, color: AppColors.mutedText),
-                          ),
-                        )
-                      : Container(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Color(0xFF2D3748), Color(0xFF1A202C)],
-                            ),
-                          ),
-                          child: const Center(
-                            child: Icon(Icons.two_wheeler_rounded, size: 48, color: Colors.white70),
-                          ),
-                        ),
-                ),
-              ),
-              Positioned(
-                top: 8,
-                right: 8,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: isStatusGood ? const Color(0xFF10B981) : AppColors.tacticalOrange,
+                    color: AppColors.clay,
                     borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                    border: Border.all(
+                      color: AppColors.tacticalOrange.withValues(alpha: 0.4),
+                      width: 1.2,
+                    ),
+                    boxShadow: AppColors.skeuRaisedSmall,
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                        ),
+                      const Icon(
+                        Icons.camera_alt_outlined,
+                        size: 15,
+                        color: AppColors.tacticalOrange,
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 6),
                       Text(
-                        statusLabel,
+                        'Recognize bike with camera',
                         style: GoogleFonts.manrope(
-                          color: Colors.white,
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.darkCharcoal,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            model,
-            style: GoogleFonts.manrope(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w800,
-              color: AppColors.darkCharcoal,
             ),
-          ),
-          const SizedBox(height: 3),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(year, style: AppTextStyles.caption),
-              Text(mileage, style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: isPrimary ? AppColors.statusGreen : AppColors.tacticalOrange,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    footerLeading,
-                    style: GoogleFonts.manrope(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: isPrimary ? AppColors.statusGreen : AppColors.tacticalOrangeDark,
-                    ),
-                  ),
-                ],
-              ),
-              if (footerTrailing.isNotEmpty)
-                Text(
-                  footerTrailing,
-                  style: GoogleFonts.manrope(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.mutedText,
+            if (bikes.isEmpty)
+              CampCard(
+                padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+                borderRadius: AppColors.radiusCard,
+                color: AppColors.clay,
+                shadows: AppColors.skeuRaised,
+                child: Center(
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: AppColors.clayDark,
+                          boxShadow: AppColors.skeuRecessed,
+                        ),
+                        child: const Center(
+                          child: Icon(Icons.two_wheeler_rounded, size: 26, color: AppColors.mutedText),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No motorcycles in garage',
+                        style: GoogleFonts.manrope(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Add your motorcycle to track maintenance and stats.',
+                        textAlign: TextAlign.center,
+                        style: AppTextStyles.caption.copyWith(color: AppColors.mutedText),
+                      ),
+                      const SizedBox(height: 14),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => Navigator.of(context).pushNamed(CampRoutes.addBike),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.tacticalOrange,
+                            borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                            boxShadow: AppColors.orangeGlow,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.add_rounded, size: 16, color: Colors.white),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Add motorcycle',
+                                style: GoogleFonts.manrope(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-        ],
+              )
+            else
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                child: Row(
+                  children: [
+                    for (int i = 0; i < bikes.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 14),
+                      _buildBikeGarageCard(
+                        bike: bikes[i],
+                        isActive: bikes[i].id == activeBike?.id,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBikeGarageCard({
+    required Bike bike,
+    required bool isActive,
+  }) {
+    final bikeItems = isActive ? _maintenanceItems : const <MaintenanceItem>[];
+    final String statusLabel;
+    final Color statusColor;
+
+    if (bikeItems.isEmpty) {
+      statusLabel = 'No data yet';
+      statusColor = AppColors.mutedText;
+    } else if (bikeItems.any((i) => i.status == MaintenanceStatus.overdue)) {
+      statusLabel = 'Overdue';
+      statusColor = AppColors.alertRed;
+    } else if (bikeItems.any((i) => i.status == MaintenanceStatus.dueSoon)) {
+      statusLabel = 'Due soon';
+      statusColor = AppColors.tacticalOrange;
+    } else if (bikeItems.any((i) => i.status == MaintenanceStatus.diyRec)) {
+      statusLabel = 'DIY Rec';
+      statusColor = const Color(0xFFF59E0B);
+    } else {
+      statusLabel = 'OK';
+      statusColor = AppColors.statusGreen;
+    }
+
+    final subtitle = bike.formattedSubtitle;
+    final mileageStr = '${bike.mileageKm.round()} km';
+    final hasPlate = bike.plateNumber != null && bike.plateNumber!.isNotEmpty;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => Navigator.of(context).pushNamed(
+        CampRoutes.bikeProfile,
+        arguments: bike.id,
       ),
+      child: Container(
+        width: 236,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.clay,
+          borderRadius: BorderRadius.circular(AppColors.radiusCard),
+          boxShadow: AppColors.skeuRaised,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Bike Image with top-right pill
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                  child: SizedBox(
+                    height: 120,
+                    width: double.infinity,
+                    child: CampBikeImage(
+                      imagePath: bike.imagePath,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                    decoration: BoxDecoration(
+                      color: statusColor,
+                      borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          statusLabel,
+                          style: GoogleFonts.manrope(
+                            color: Colors.white,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              bike.name,
+              style: GoogleFonts.manrope(
+                fontSize: 14.5,
+                fontWeight: FontWeight.w800,
+                color: AppColors.darkCharcoal,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 3),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    subtitle.isNotEmpty ? subtitle : (hasPlate ? bike.plateNumber! : 'Motorcycle'),
+                    style: AppTextStyles.caption,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  mileageStr,
+                  style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            if (hasPlate && subtitle.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                'Plate: ${bike.plateNumber!}',
+                style: AppTextStyles.caption.copyWith(fontSize: 10),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isActive ? AppColors.statusGreen : AppColors.mutedLight,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      isActive ? 'Primary Ride' : 'Standby Fleet',
+                      style: GoogleFonts.manrope(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: isActive ? AppColors.statusGreen : AppColors.mutedText,
+                      ),
+                    ),
+                  ],
+                ),
+                if (isActive)
+                  Text(
+                    'Active',
+                    style: GoogleFonts.manrope(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.statusGreen,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
   // ── 7. Maintenance Health Card ─────────────────────────────────────────────
   Widget _buildMaintenanceHealthCard() {
-    return CampCard(
-      padding: const EdgeInsets.all(AppColors.cardPadding),
-      borderRadius: AppColors.radiusCard,
-      color: AppColors.clay,
-      shadows: AppColors.skeuRaised,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header row with Shield + Title + Telemetry Monitored pill
-          Row(
+    return ListenableBuilder(
+      listenable: ActiveBikeController.instance,
+      builder: (context, _) {
+        final activeBike = ActiveBikeController.instance.activeBike;
+        final items = activeBike != null
+            ? _maintenanceItems
+            : const <MaintenanceItem>[];
+
+        final String overallStatusLabel;
+        final Color overallStatusColor;
+
+        if (items.isEmpty) {
+          overallStatusLabel = 'No data yet';
+          overallStatusColor = AppColors.mutedText;
+        } else if (items.any((i) => i.status == MaintenanceStatus.overdue)) {
+          overallStatusLabel = 'Overdue';
+          overallStatusColor = AppColors.alertRed;
+        } else if (items.any((i) => i.status == MaintenanceStatus.dueSoon)) {
+          overallStatusLabel = 'Due soon';
+          overallStatusColor = AppColors.tacticalOrange;
+        } else if (items.any((i) => i.status == MaintenanceStatus.diyRec)) {
+          overallStatusLabel = 'DIY Rec';
+          overallStatusColor = const Color(0xFFF59E0B);
+        } else {
+          overallStatusLabel = 'OK';
+          overallStatusColor = AppColors.statusGreen;
+        }
+
+        final overdueCount = items.where((i) => i.status == MaintenanceStatus.overdue).length;
+        final dueSoonCount = items.where((i) => i.status == MaintenanceStatus.dueSoon).length;
+        final okCount = items.where((i) => i.status == MaintenanceStatus.ok).length;
+
+        // Sort items by priority: overdue first, then dueSoon, then diyRec, then ok
+        final sortedItems = List<MaintenanceItem>.from(items)
+          ..sort((a, b) {
+            int priority(MaintenanceStatus s) => switch (s) {
+                  MaintenanceStatus.overdue => 0,
+                  MaintenanceStatus.dueSoon => 1,
+                  MaintenanceStatus.diyRec => 2,
+                  MaintenanceStatus.ok => 3,
+                };
+            return priority(a.status).compareTo(priority(b.status));
+          });
+
+        return CampCard(
+          padding: const EdgeInsets.all(AppColors.cardPadding),
+          borderRadius: AppColors.radiusCard,
+          color: AppColors.clay,
+          shadows: AppColors.skeuRaised,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFEDD5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.shield_outlined,
-                    size: 18,
-                    color: AppColors.tacticalOrange,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'MAINTENANCE HEALTH',
-                  style: GoogleFonts.manrope(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.darkCharcoal,
-                    letterSpacing: 0.4,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFEDD5),
-                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                ),
-                child: Text(
-                  'Telemetry Monitored',
-                  style: GoogleFonts.manrope(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.tacticalOrangeDark,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 14),
-
-          // Sub-card with Health Ring + Service forecast
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(AppColors.radiusTile),
-              boxShadow: AppColors.skeuRaisedSmall,
-            ),
-            child: Row(
-              children: [
-                // 82% Health circular ring
-                SizedBox(
-                  width: 58,
-                  height: 58,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      const CircularProgressIndicator(
-                        value: 0.82,
-                        strokeWidth: 6,
-                        backgroundColor: AppColors.clayDark,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.tacticalOrange),
-                      ),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            '82%',
-                            style: GoogleFonts.manrope(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.darkCharcoal,
-                            ),
-                          ),
-                          Text(
-                            'HEALTH',
-                            style: GoogleFonts.manrope(
-                              fontSize: 7.5,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.mutedText,
-                              letterSpacing: 0.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      RichText(
-                        text: TextSpan(
-                          style: GoogleFonts.manrope(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.darkCharcoal,
-                          ),
-                          children: const [
-                            TextSpan(text: 'Next service due in '),
-                            TextSpan(
-                              text: '640 km',
-                              style: TextStyle(color: AppColors.tacticalOrange, fontWeight: FontWeight.w800),
-                            ),
-                            TextSpan(text: ' or '),
-                            TextSpan(
-                              text: '12 days',
-                              style: TextStyle(color: AppColors.tacticalOrange, fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'BMW R 1250 GS Adv • 15,000 km Inspection',
-                        style: AppTextStyles.caption,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Top At-Risk Components header
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Top At-Risk Components',
-                style: GoogleFonts.manrope(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.darkCharcoal,
-                ),
-              ),
-              Text(
-                'Wear Severity',
-                style: AppTextStyles.caption.copyWith(fontSize: 11),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 10),
-
-          // Component 1: Drive Chain & Sprocket
-          _buildRiskComponentRow(
-            name: 'Drive Chain & Sprocket',
-            wearPercent: '78% Wear',
-            isRed: true,
-            progressFraction: 0.78,
-            warningReason: 'Rough terrain & river crossing on last trip',
-          ),
-
-          const SizedBox(height: 10),
-
-          // Component 2: Front Brake Pads
-          _buildRiskComponentRow(
-            name: 'Front Brake Pads',
-            wearPercent: '65% Wear',
-            isRed: false,
-            progressFraction: 0.65,
-            warningReason: 'Heavy descent braking on Alpine Route 4',
-          ),
-
-          const SizedBox(height: 14),
-
-          // View Full Report Button
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).pushNamed('/mechanics'),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.clay,
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                border: Border.all(
-                  color: const Color(0xFFCBD5E1),
-                  width: 1.2,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              // Header row with Shield + Title + Health Badge
+              Row(
                 children: [
-                  Text(
-                    'View Full Report',
-                    style: GoogleFonts.manrope(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.darkCharcoal,
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFEDD5),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.shield_outlined,
+                        size: 18,
+                        color: AppColors.tacticalOrange,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: AppColors.darkCharcoal,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'MAINTENANCE HEALTH',
+                      style: GoogleFonts.manrope(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.darkCharcoal,
+                        letterSpacing: 0.4,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                    decoration: BoxDecoration(
+                      color: overallStatusColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                      border: Border.all(
+                        color: overallStatusColor.withValues(alpha: 0.4),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      overallStatusLabel,
+                      style: GoogleFonts.manrope(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: overallStatusColor,
+                      ),
+                    ),
                   ),
                 ],
               ),
-            ),
+
+              const SizedBox(height: 14),
+
+              if (items.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                    boxShadow: AppColors.skeuRaisedSmall,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        activeBike != null
+                            ? 'No maintenance items recorded for ${activeBike.name}'
+                            : 'No active motorcycle selected',
+                        style: GoogleFonts.manrope(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Track service intervals, component wear, and upcoming maintenance schedules.',
+                        style: AppTextStyles.caption.copyWith(color: AppColors.mutedText),
+                      ),
+                    ],
+                  ),
+                )
+              else ...[
+                // Item breakdown summary
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                    boxShadow: AppColors.skeuRaisedSmall,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildHealthStatCount('Overdue', overdueCount, AppColors.alertRed),
+                      Container(height: 20, width: 1, color: AppColors.clayDark),
+                      _buildHealthStatCount('Due Soon', dueSoonCount, AppColors.tacticalOrange),
+                      Container(height: 20, width: 1, color: AppColors.clayDark),
+                      _buildHealthStatCount('OK', okCount, AppColors.statusGreen),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                Text(
+                  'Monitored Components',
+                  style: GoogleFonts.manrope(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.darkCharcoal,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                for (final item in sortedItems.take(3)) ...[
+                  _buildRealMaintenanceItemRow(item),
+                  const SizedBox(height: 8),
+                ],
+              ],
+
+              const SizedBox(height: 10),
+
+              // View Full Report Button
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).pushNamed(CampRoutes.mechanics),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.clay,
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                    border: Border.all(
+                      color: const Color(0xFFCBD5E1),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'View Maintenance Details',
+                        style: GoogleFonts.manrope(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppColors.darkCharcoal,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildRiskComponentRow({
-    required String name,
-    required String wearPercent,
-    required bool isRed,
-    required double progressFraction,
-    required String warningReason,
-  }) {
+  Widget _buildHealthStatCount(String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          '$count',
+          style: GoogleFonts.manrope(
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: AppTextStyles.caption.copyWith(fontSize: 10.5, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRealMaintenanceItemRow(MaintenanceItem item) {
+    final (statusLabel, statusColor) = switch (item.status) {
+      MaintenanceStatus.overdue => ('Overdue', AppColors.alertRed),
+      MaintenanceStatus.dueSoon => ('Due soon', AppColors.tacticalOrange),
+      MaintenanceStatus.diyRec => ('DIY Rec', const Color(0xFFF59E0B)),
+      MaintenanceStatus.ok => ('OK', AppColors.statusGreen),
+    };
+
+    final subtitle = item.dueMileage != null && item.dueMileage!.trim().isNotEmpty
+        ? 'Service at ${item.dueMileage} km'
+        : (item.dueDate != null && item.dueDate!.trim().isNotEmpty
+            ? 'Due: ${item.dueDate}'
+            : (item.conditionNote ?? item.subtitle ?? 'Recurring check'));
+
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(AppColors.radiusTile),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                name,
-                style: GoogleFonts.manrope(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.darkCharcoal,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                decoration: BoxDecoration(
-                  color: isRed ? const Color(0xFFFEE2E2) : const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                ),
-                child: Text(
-                  wearPercent,
-                  style: GoogleFonts.manrope(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    color: isRed ? AppColors.alertRed : const Color(0xFFD97706),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 7),
-          // Progress bar
-          ClipRRect(
-            borderRadius: BorderRadius.circular(AppColors.radiusPill),
-            child: Container(
-              height: 5,
-              color: AppColors.clayDark,
-              child: FractionallySizedBox(
-                alignment: Alignment.centerLeft,
-                widthFactor: progressFraction,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: isRed ? AppColors.alertRed : AppColors.tacticalOrange,
-                    borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                  ),
-                ),
-              ),
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: statusColor,
+              shape: BoxShape.circle,
             ),
           ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                size: 14,
-                color: Color(0xFFD97706),
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  warningReason,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: GoogleFonts.manrope(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.darkCharcoal,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  subtitle,
                   style: AppTextStyles.caption.copyWith(fontSize: 11),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppColors.radiusPill),
+            ),
+            child: Text(
+              statusLabel,
+              style: GoogleFonts.manrope(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                color: statusColor,
               ),
-            ],
+            ),
           ),
         ],
       ),
@@ -1450,64 +1395,75 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 8. Recent Trips Section ────────────────────────────────────────────────
   Widget _buildRecentTripsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(
-          title: 'RECENT TRIPS',
-          actionLabel: 'See all',
-          onAction: () => _showNotification('Opening full trip logbook...'),
-        ),
-        _buildTripCard(
-          title: 'Babusar Pass Summit & Alpine Ridge',
-          tag: 'Mixed',
-          tagBg: const Color(0xFFFEF3C7),
-          tagFg: const Color(0xFFD97706),
-          subtitle: 'Yesterday, Oct 14 • 286.4 km',
-          impactIcon: Icons.explore_outlined,
-          impactColor: AppColors.tacticalOrange,
-          impactText: 'High wear (+3.4% chain wear)',
-          duration: '5h 42m',
-        ),
-        const SizedBox(height: 10),
-        _buildTripCard(
-          title: 'Karakoram High-Altitude Corridor',
-          tag: 'Highway',
-          tagBg: const Color(0xFFEFF6FF),
-          tagFg: const Color(0xFF2563EB),
-          subtitle: 'Oct 11, 2024 • 412.0 km',
-          impactIcon: Icons.check_circle_outline_rounded,
-          impactColor: AppColors.statusGreen,
-          impactText: 'Nominal impact',
-          duration: '6h 15m',
-        ),
-        const SizedBox(height: 10),
-        _buildTripCard(
-          title: 'Cholistan Desert Sand Nav Loop',
-          tag: 'Off-road',
-          tagBg: const Color(0xFFFFEDD5),
-          tagFg: AppColors.tacticalOrangeDark,
-          subtitle: 'Sep 15, 2024 • 188.0 km',
-          impactIcon: Icons.air_rounded,
-          impactColor: AppColors.tacticalOrange,
-          impactText: 'High dust impact (air filter)',
-          duration: '3h 50m',
-        ),
-      ],
+    return ListenableBuilder(
+      listenable: PostRideReportController.instance,
+      builder: (context, _) {
+        final reports = PostRideReportController.instance.reports;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SectionHeader(
+              title: 'RECENT TRIPS',
+              actionLabel: reports.isNotEmpty ? 'See all' : null,
+              onAction: reports.isNotEmpty
+                  ? () => Navigator.of(context).pushNamed(CampRoutes.rideHistory)
+                  : null,
+            ),
+            if (reports.isEmpty)
+              CampCard(
+                padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                borderRadius: AppColors.radiusCard,
+                color: AppColors.clay,
+                shadows: AppColors.skeuRaised,
+                child: Center(
+                  child: Column(
+                    children: [
+                      const Icon(Icons.route_rounded, size: 36, color: AppColors.mutedLight),
+                      const SizedBox(height: 8),
+                      Text(
+                        'No rides yet',
+                        style: GoogleFonts.manrope(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Completed rides will appear here with distance, duration, and terrain summary.',
+                        textAlign: TextAlign.center,
+                        style: AppTextStyles.caption.copyWith(color: AppColors.mutedText),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else ...[
+              for (final report in reports.take(3)) ...[
+                _buildRealTripCard(report),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildTripCard({
-    required String title,
-    required String tag,
-    required Color tagBg,
-    required Color tagFg,
-    required String subtitle,
-    required IconData impactIcon,
-    required Color impactColor,
-    required String impactText,
-    required String duration,
-  }) {
+  Widget _buildRealTripCard(PostRideReport report) {
+    final title = report.routeTitle.isNotEmpty
+        ? report.routeTitle
+        : 'Ride on ${report.formattedDate}';
+    final tag = report.terrain.isNotEmpty ? report.terrain : 'Ride';
+    final subtitle = '${report.formattedDate} • ${report.distanceKm.toStringAsFixed(1)} km';
+    final duration = report.durationHours != null
+        ? '${report.durationHours!.toStringAsFixed(1)} hrs'
+        : (report.durationMinutes != null ? '${report.durationMinutes} min' : '—');
+    final String note = (report.notes != null && report.notes!.trim().isNotEmpty)
+        ? report.notes!
+        : 'Logged ride';
+
     return CampCard(
       padding: const EdgeInsets.all(14),
       borderRadius: AppColors.radiusCard,
@@ -1527,13 +1483,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     fontWeight: FontWeight.w800,
                     color: AppColors.darkCharcoal,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: tagBg,
+                  color: const Color(0xFFFFEDD5),
                   borderRadius: BorderRadius.circular(AppColors.radiusPill),
                 ),
                 child: Text(
@@ -1541,7 +1499,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   style: GoogleFonts.manrope(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
-                    color: tagFg,
+                    color: AppColors.tacticalOrangeDark,
                   ),
                 ),
               ),
@@ -1553,21 +1511,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(impactIcon, size: 14, color: impactColor),
-                  const SizedBox(width: 5),
-                  Text(
-                    impactText,
-                    style: GoogleFonts.manrope(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.darkCharcoal,
+              Expanded(
+                child: Row(
+                  children: [
+                    const Icon(Icons.explore_outlined, size: 14, color: AppColors.tacticalOrange),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        note,
+                        style: GoogleFonts.manrope(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.darkCharcoal,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
               Text(
                 duration,
                 style: GoogleFonts.manrope(
@@ -1585,152 +1549,214 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 9. Rider Medical & SOS ID Card ─────────────────────────────────────────
   Widget _buildMedicalSosCard() {
-    return CampCard(
-      padding: const EdgeInsets.all(AppColors.cardPadding),
-      borderRadius: AppColors.radiusCard,
-      color: AppColors.clay,
-      shadows: AppColors.skeuRaised,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return ListenableBuilder(
+      listenable: ProfileController.instance,
+      builder: (context, _) {
+        final controller = ProfileController.instance;
+        final contacts = controller.emergencyContacts;
+        final primary = controller.primaryEmergencyContact;
+        final hasContacts = contacts.isNotEmpty;
+
+        return CampCard(
+          padding: const EdgeInsets.all(AppColors.cardPadding),
+          borderRadius: AppColors.radiusCard,
+          color: AppColors.clay,
+          shadows: AppColors.skeuRaised,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEE2E2),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.add_rounded,
-                    size: 18,
-                    color: AppColors.alertRed,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'RIDER MEDICAL & SOS ID',
-                  style: GoogleFonts.manrope(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.darkCharcoal,
-                    letterSpacing: 0.3,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDCFCE7),
-                  borderRadius: BorderRadius.circular(AppColors.radiusPill),
-                ),
-                child: Text(
-                  'Telemetry Armed',
-                  style: GoogleFonts.manrope(
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.statusGreen,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _buildInfoKeyValueRow(
-            label: 'Emergency ICE:',
-            valueWidget: Text(
-              'Sarah Henderson (Spouse) • +1 (555) 019-4821',
-              style: GoogleFonts.manrope(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.darkCharcoal,
-              ),
-              textAlign: TextAlign.right,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _buildInfoKeyValueRow(
-            label: 'Blood & Allergies:',
-            valueWidget: RichText(
-              textAlign: TextAlign.right,
-              text: TextSpan(
-                style: GoogleFonts.manrope(fontSize: 11.5, fontWeight: FontWeight.w800),
-                children: const [
-                  TextSpan(
-                    text: 'O+ POS',
-                    style: TextStyle(color: AppColors.alertRed),
-                  ),
-                  TextSpan(
-                    text: ' • Penicillin (Severe)',
-                    style: TextStyle(color: AppColors.darkCharcoal, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _buildInfoKeyValueRow(
-            label: 'Satellite SOS Beacon:',
-            valueWidget: Text(
-              'Iridium #IR-88210-GS',
-              style: GoogleFonts.manrope(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-                color: AppColors.darkCharcoal,
-              ),
-              textAlign: TextAlign.right,
-            ),
-          ),
-          const SizedBox(height: 16),
-          // View Emergency Protocols button
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => _showNotification('Emergency ICE & Health Protocols: Iridium #IR-88210-GS active'),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
-              decoration: BoxDecoration(
-                color: AppColors.clay,
-                borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                border: Border.all(
-                  color: AppColors.alertRed.withValues(alpha: 0.35),
-                  width: 1.2,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Row(
                 children: [
-                  Flexible(
-                    child: Text(
-                      'View Emergency Protocols & Health Card',
-                      style: GoogleFonts.manrope(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEE2E2),
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.add_rounded,
+                        size: 18,
                         color: AppColors.alertRed,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'RIDER MEDICAL & SOS ID',
+                      style: GoogleFonts.manrope(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.darkCharcoal,
+                        letterSpacing: 0.3,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: AppColors.alertRed,
-                  ),
+                  const SizedBox(width: 8),
+                  if (hasContacts)
+                    Container(
+                      key: const Key('badge_sos_ready'),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                      ),
+                      child: Text(
+                        'SOS ready',
+                        style: GoogleFonts.manrope(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.statusGreen,
+                        ),
+                      ),
+                    )
+                  else
+                    GestureDetector(
+                      key: const Key('badge_add_contact'),
+                      onTap: () => Navigator.of(context).pushNamed(CampRoutes.editProfile),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(AppColors.radiusPill),
+                          border: Border.all(color: const Color(0xFFFDE68A), width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.add_rounded, size: 11, color: AppColors.tacticalOrange),
+                            const SizedBox(width: 3),
+                            Text(
+                              'Add a contact',
+                              style: GoogleFonts.manrope(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.tacticalOrange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                 ],
               ),
-            ),
+              const SizedBox(height: 14),
+              _buildInfoKeyValueRow(
+                label: 'Emergency ICE:',
+                valueWidget: Text(
+                  hasContacts && primary != null
+                      ? '${primary.name}${primary.relation.isNotEmpty ? " (${primary.relation})" : ""} • ${EmergencyPhoneHelper.formatPhoneReadable(primary.phone)}${contacts.length > 1 ? " (+${contacts.length - 1} more)" : ""}'
+                      : 'Emergency Contact Not Set',
+                  style: GoogleFonts.manrope(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkCharcoal,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildInfoKeyValueRow(
+                label: 'Blood & Allergies:',
+                valueWidget: Builder(
+                  builder: (context) {
+                    final blood = controller.bloodGroup.trim();
+                    final allergies = controller.allergies.trim();
+                    if (blood.isEmpty && allergies.isEmpty) {
+                      return Text(
+                        'Not set',
+                        style: GoogleFonts.manrope(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.mutedText,
+                          fontStyle: FontStyle.italic,
+                        ),
+                        textAlign: TextAlign.right,
+                      );
+                    }
+                    return RichText(
+                      textAlign: TextAlign.right,
+                      text: TextSpan(
+                        style: GoogleFonts.manrope(fontSize: 11.5, fontWeight: FontWeight.w800),
+                        children: [
+                          if (blood.isNotEmpty)
+                            TextSpan(
+                              text: blood,
+                              style: const TextStyle(color: AppColors.alertRed),
+                            ),
+                          if (allergies.isNotEmpty)
+                            TextSpan(
+                              text: blood.isNotEmpty ? ' • $allergies' : allergies,
+                              style: const TextStyle(color: AppColors.darkCharcoal, fontWeight: FontWeight.w600),
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildInfoKeyValueRow(
+                label: 'Emergency SOS Method:',
+                valueWidget: Text(
+                  'Phone SMS & Dialer',
+                  style: GoogleFonts.manrope(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.darkCharcoal,
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // View Emergency Protocols button
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _showNotification('Emergency ICE & Health Protocols configured via device SMS and dialer'),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.clay,
+                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                    border: Border.all(
+                      color: AppColors.alertRed.withValues(alpha: 0.35),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          'View Emergency Protocols & Health Card',
+                          style: GoogleFonts.manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.alertRed,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 18,
+                        color: AppColors.alertRed,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -1753,127 +1779,134 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 10. Settings Section ───────────────────────────────────────────────────
   Widget _buildSettingsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'SETTINGS',
-          style: AppTextStyles.overline,
-        ),
-        const SizedBox(height: 10),
-        CampCard(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
-          borderRadius: AppColors.radiusCard,
-          color: AppColors.clay,
-          shadows: AppColors.skeuRaised,
-          child: Column(
-            children: [
-              _buildSettingsRow(
-                icon: Icons.person_outline_rounded,
-                title: 'Edit Personal Info',
-                trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
-                onTap: () => Navigator.of(context).pushNamed('/edit-profile'),
-              ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                icon: Icons.straighten_rounded,
-                title: 'Units',
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.clayDark,
-                    borderRadius: BorderRadius.circular(AppColors.radiusPill),
+    return ListenableBuilder(
+      listenable: SettingsController.instance,
+      builder: (context, _) {
+        final settings = SettingsController.instance;
+        final notificationsLabel = settings.notificationsEnabled ? 'Enabled' : 'Disabled';
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'SETTINGS',
+              style: AppTextStyles.overline,
+            ),
+            const SizedBox(height: 10),
+            CampCard(
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+              borderRadius: AppColors.radiusCard,
+              color: AppColors.clay,
+              shadows: AppColors.skeuRaised,
+              child: Column(
+                children: [
+                  _buildSettingsRow(
+                    icon: Icons.person_outline_rounded,
+                    title: 'Edit Personal Info',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.editProfile),
                   ),
-                  child: Text(
-                    'Metric (KM, °C)',
-                    style: GoogleFonts.manrope(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.darkCharcoal,
+                  const Divider(height: 1, color: Color(0x12000000)),
+                  _buildSettingsRow(
+                    icon: Icons.notifications_none_rounded,
+                    title: 'Notifications',
+                    subtitle: 'Low fuel alerts',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          notificationsLabel,
+                          style: GoogleFonts.manrope(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: settings.notificationsEnabled ? AppColors.statusGreen : AppColors.mutedText,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                      ],
                     ),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
                   ),
-                ),
-                onTap: () => _showNotification('Units Configuration'),
-              ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                icon: Icons.notifications_none_rounded,
-                title: 'Notifications',
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Enabled',
-                      style: GoogleFonts.manrope(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.statusGreen,
+                  const Divider(height: 1, color: Color(0x12000000)),
+                  _buildSettingsRow(
+                    icon: Icons.cloud_download_outlined,
+                    title: 'Offline Maps',
+                    subtitle: 'Coming soon',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
+                  ),
+                  const Divider(height: 1, color: Color(0x12000000)),
+                  _buildSettingsRow(
+                    icon: Icons.security_rounded,
+                    title: 'Privacy & Data',
+                    subtitle: 'Your data stays on this phone.',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
+                  ),
+                  const Divider(height: 1, color: Color(0x12000000)),
+                  _buildSettingsRow(
+                    icon: Icons.help_outline_rounded,
+                    title: 'Help & Support',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
+                  ),
+                  const Divider(height: 1, color: Color(0x12000000)),
+                  _buildSettingsRow(
+                    customLeading: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppColors.clayDark,
+                        borderRadius: BorderRadius.circular(AppColors.radiusTile),
+                        boxShadow: AppColors.skeuRecessed,
+                      ),
+                      child: Center(
+                        child: Text(
+                          'CAMP',
+                          style: GoogleFonts.manrope(
+                            color: AppColors.tacticalOrange,
+                            fontSize: 8.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                    title: 'About CAMP',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'v1.0.0 (Build 890-GS)',
+                          style: GoogleFonts.manrope(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.mutedText,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                      ],
+                    ),
+                    onTap: () => Navigator.of(context).pushNamed(CampRoutes.settings),
+                  ),
+                  if (kDebugMode) ...[
+                    const Divider(height: 1, color: Color(0x12000000)),
+                    _buildSettingsRow(
+                      key: const ValueKey('profile_tracking_diagnostics_row'),
+                      icon: Icons.bug_report_rounded,
+                      title: 'Tracking diagnostics (debug)',
+                      subtitle: 'Inspect live location fixes & filters',
+                      trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
+                      onTap: () => Navigator.of(context).pushNamed(CampRoutes.trackingDiagnostics),
+                    ),
                   ],
-                ),
-                onTap: () => _showNotification('Notifications Config'),
+                ],
               ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                icon: Icons.cloud_download_outlined,
-                title: 'Offline Maps',
-                subtitle: '1.4 GB / 8.2 GB cached',
-                trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
-                onTap: () => _showNotification('Offline Maps: 1.4 GB / 8.2 GB cached across 5 route packs'),
-              ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                icon: Icons.security_rounded,
-                title: 'Privacy & Telemetry Sharing',
-                trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
-                onTap: () => _showNotification('Privacy & Telemetry'),
-              ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                icon: Icons.help_outline_rounded,
-                title: 'Help & Support',
-                trailing: const Icon(Icons.chevron_right_rounded, color: AppColors.mutedLight, size: 20),
-                onTap: () => _showNotification('Help & Support'),
-              ),
-              const Divider(height: 1, color: Color(0x12000000)),
-              _buildSettingsRow(
-                customLeading: Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: AppColors.clayDark,
-                    borderRadius: BorderRadius.circular(AppColors.radiusTile),
-                    boxShadow: AppColors.skeuRecessed,
-                  ),
-                  child: Center(
-                    child: Text(
-                      'CAMP',
-                      style: GoogleFonts.manrope(
-                        color: AppColors.tacticalOrange,
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-                title: 'About CAMP',
-                trailing: Text(
-                  'v1.0.0 (Build 890-GS)',
-                  style: GoogleFonts.manrope(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.mutedText,
-                  ),
-                ),
-                onTap: () => _showNotification('CAMP Mobility Suite v1.0.0'),
-              ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1881,11 +1914,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required String title,
     required Widget trailing,
     required VoidCallback onTap,
+    Key? key,
     IconData? icon,
     Widget? customLeading,
     String? subtitle,
   }) {
     return GestureDetector(
+      key: key,
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
@@ -1933,7 +1968,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildLogOutButton() {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => _showNotification('Rider session disconnected'),
+      onTap: _handleLogout,
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1967,5 +2002,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.clay,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppColors.radiusCard),
+        ),
+        title: Text(
+          'Log Out',
+          style: GoogleFonts.manrope(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: AppColors.darkCharcoal,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to log out? Local ride history and bike data will be preserved.',
+          style: GoogleFonts.manrope(
+            fontSize: 13.5,
+            color: AppColors.darkCharcoal,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.manrope(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.mutedText,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Log Out',
+              style: GoogleFonts.manrope(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: AppColors.alertRed,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      await AuthController.instance.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        CampRoutes.signIn,
+        (route) => false,
+      );
+    }
   }
 }

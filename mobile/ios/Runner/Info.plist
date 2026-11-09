@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Location permission required by geolocator for GPS altitude reading.
+	     Used only on the Carburetor tab to read the phone's altitude for
+	     jetting guidance. No background location access is requested. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>CAMP reads your altitude to calculate air density for carburetor jetting guidance. Your location is never stored or transmitted.</string>
+	<!-- Camera permission required for the Bike Scan screen photo capture. -->
+	<key>NSCameraUsageDescription</key>
+	<string>CAMP uses the camera to photograph your motorcycle so you can quickly register it to your garage.</string>
+	<!-- Photo library permission required so riders can pick an existing photo of their bike. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>CAMP lets you pick an existing photo of your motorcycle from your photo library to register it to your garage.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
@@ -15,7 +26,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>camp</string>
+	<string>Camp</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

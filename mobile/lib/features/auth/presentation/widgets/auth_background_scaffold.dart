@@ -1,8 +1,7 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// Full-screen dusk mountain highway background with blur and gradient vignette
+/// Full-screen dusk mountain highway background with gradient vignette
 class AuthBackgroundScaffold extends StatelessWidget {
   const AuthBackgroundScaffold({
     required this.child,
@@ -72,15 +71,7 @@ class AuthBackgroundScaffold extends StatelessWidget {
               ),
             ),
 
-            // ── Layer 3: Subtle Glassmorphism Backdrop Blur ──────────────────
-            BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.15),
-              ),
-            ),
-
-            // ── Layer 4: Content ─────────────────────────────────────────────
+            // ── Layer 3: Content ─────────────────────────────────────────────
             SafeArea(
               child: Column(
                 children: [

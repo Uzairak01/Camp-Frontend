@@ -30,11 +30,21 @@ Thumbs.db
 # Environment Variables & Secrets
 # -------------------------------
 .env
+*.env
 .env.*
 !.env.example
 *.pem
 *.key
 *.cert
+*.jks
+*.keystore
+**/key.properties
+**/local.properties
+key.properties
+local.properties
+SECRETS.md
+secrets.md
+AUDIT_REPORT.md
 
 # Node.js / Backend
 # -----------------
@@ -102,3 +112,7 @@ ui-debug.log*
 *.tmp
 *.bak
 migrated/
+
+# Agents
+Agents.md
+PROGRESS.md

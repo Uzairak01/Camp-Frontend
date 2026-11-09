@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
+import '../../../../core/widgets/widgets.dart';
 
 /// Hero photo widget showing the active motorcycle expedition photo with
 /// bottom overlay displaying bike model and masked VIN.
@@ -34,21 +35,9 @@ class HeroPhotoWidget extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             // Background image
-            Image.asset(
-              imagePath,
+            CampBikeImage(
+              imagePath: imagePath,
               fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: const Color(0xFF2C2523),
-                  child: const Center(
-                    child: Icon(
-                      Icons.two_wheeler_rounded,
-                      size: 56,
-                      color: AppColors.clayDark,
-                    ),
-                  ),
-                );
-              },
             ),
 
             // Top subtle vignette and Bottom dark gradient for high legibility

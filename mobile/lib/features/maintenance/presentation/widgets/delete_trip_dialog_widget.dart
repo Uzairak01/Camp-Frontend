@@ -9,15 +9,18 @@ class DeleteTripDialogWidget extends StatelessWidget {
   const DeleteTripDialogWidget({
     required this.tripName,
     super.key,
+    this.expenseCount = 0,
     this.onConfirmDelete,
   });
 
   final String tripName;
+  final int expenseCount;
   final VoidCallback? onConfirmDelete;
 
   static Future<bool?> show(
     BuildContext context, {
     required String tripName,
+    int expenseCount = 0,
     VoidCallback? onConfirmDelete,
   }) {
     return showDialog<bool>(
@@ -25,6 +28,7 @@ class DeleteTripDialogWidget extends StatelessWidget {
       barrierDismissible: true,
       builder: (context) => DeleteTripDialogWidget(
         tripName: tripName,
+        expenseCount: expenseCount,
         onConfirmDelete: onConfirmDelete,
       ),
     );
@@ -84,7 +88,9 @@ class DeleteTripDialogWidget extends StatelessWidget {
 
             // Explanatory body text
             Text(
-              'This will remove the trip and its budget, but your maintenance records will stay.',
+              expenseCount > 0
+                  ? 'This will delete $expenseCount ${expenseCount == 1 ? 'expense' : 'expenses'} with it. Your maintenance records will stay.'
+                  : 'This will remove the trip and its budget. Your maintenance records will stay.',
               textAlign: TextAlign.center,
               style: AppTextStyles.bodySecondary.copyWith(
                 fontSize: 13,

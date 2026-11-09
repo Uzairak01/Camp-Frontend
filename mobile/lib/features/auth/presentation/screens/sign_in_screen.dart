@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../app/routes.dart';
 import '../../controllers/auth_controller.dart';
 import '../theme/auth_colors.dart';
 import '../widgets/auth_background_scaffold.dart';
 import '../widgets/auth_brand_header.dart';
 import '../widgets/auth_card.dart';
-import '../widgets/auth_express_button.dart';
+import '../widgets/auth_google_button.dart';
 import '../widgets/auth_primary_button.dart';
 import '../widgets/auth_text_field.dart';
 
-/// CAMP Sign In / Welcome Back Screen
+/// CAMP Sign In / Welcome Back Screen.
+///
+/// Features translucent glassmorphism over the dusk background, empty form
+/// fields with clear hints, and authentic error messaging for unknown email
+/// and incorrect password conditions.
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
 
@@ -19,11 +24,10 @@ class SignInScreen extends StatefulWidget {
 }
 
 class _SignInScreenState extends State<SignInScreen> {
-  final _emailController = TextEditingController(text: 'moto.rider@camp.io');
-  final _passwordController = TextEditingController(text: 'Adventure#2026');
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
-  bool _isBiometricLoading = false;
   String? _errorMessage;
 
   @override
@@ -41,7 +45,9 @@ class _SignInScreenState extends State<SignInScreen> {
         content: Row(
           children: [
             Icon(
-              isError ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
+              isError
+                  ? Icons.error_outline_rounded
+                  : Icons.check_circle_outline_rounded,
               color: isError ? Colors.redAccent : AuthColors.orangeLight,
               size: 20,
             ),
@@ -60,10 +66,13 @@ class _SignInScreenState extends State<SignInScreen> {
         ),
         backgroundColor: const Color(0xFF26201D),
         behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-            color: isError ? Colors.redAccent.withValues(alpha: 0.5) : AuthColors.orangeBadgeBorder,
+            color: isError
+                ? Colors.redAccent.withValues(alpha: 0.5)
+                : AuthColors.orangeBadgeBorder,
             width: 1,
           ),
         ),
@@ -87,38 +96,33 @@ class _SignInScreenState extends State<SignInScreen> {
     setState(() => _isLoading = false);
 
     if (success) {
-      _showNotification('Telemetry verified. Welcome back, Rider!');
-      Navigator.of(context).pushReplacementNamed('/');
+      final firstName = AuthController.instance.riderFirstName.trim();
+      final welcome = firstName.isNotEmpty
+          ? 'Welcome back, $firstName'
+          : 'Welcome back';
+      _showNotification(welcome);
+      Navigator.of(context).pushReplacementNamed(CampRoutes.home);
     } else {
       setState(() {
-        _errorMessage = AuthController.instance.state.errorMessage ?? 'Sign in failed';
+        _errorMessage = AuthController.instance.state.errorMessage ??
+            'Sign in failed. Please check your credentials.';
       });
       _showNotification(_errorMessage!, isError: true);
     }
   }
 
-  Future<void> _handleBiometricTap() async {
-    setState(() => _isBiometricLoading = true);
-
-    _showNotification('Scanning Bluetooth Helmet Token & Biometrics...');
-
-    final success = await AuthController.instance.signInWithBiometric();
-
-    if (!mounted) return;
-    setState(() => _isBiometricLoading = false);
-
-    if (success) {
-      _showNotification('Helmet Token Linked: SCHUBERTH C5 (Active)');
-      Navigator.of(context).pushReplacementNamed('/');
-    }
+  /// Handles "Continue with Google" tap.
+  ///
+  /// Note: Firebase Auth will back this integration in a future release.
+  /// For now, an honest notification is displayed and no sign-in is faked.
+  void _handleGoogleSignIn() {
+    _showNotification('Google sign-in is coming soon');
   }
 
   @override
   Widget build(BuildContext context) {
     return AuthBackgroundScaffold(
-      topBar: AuthBrandHeader.signIn(
-        onCompassTap: () => _showNotification('GPS Telemetry Beacon: Calibrated'),
-      ),
+      topBar: const AuthBrandHeader.signIn(),
       bottomBar: _buildFooter(context),
       child: Center(
         child: SingleChildScrollView(
@@ -144,7 +148,7 @@ class _SignInScreenState extends State<SignInScreen> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Sign in to access your telemetry & routes',
+                      'Sign in to access your cockpit & routes',
                       textAlign: TextAlign.center,
                       style: GoogleFonts.manrope(
                         color: AuthColors.textSubtitle,
@@ -155,11 +159,11 @@ class _SignInScreenState extends State<SignInScreen> {
 
                     const SizedBox(height: 24),
 
-                    // ── Field 1: Rider ID or Email ───────────────────────────
+                    // ── Field 1: Email ───────────────────────────────────────
                     AuthTextField(
-                      label: 'Rider ID or Email',
+                      label: 'Email',
                       controller: _emailController,
-                      hintText: 'moto.rider@camp.io',
+                      hintText: 'Email',
                       prefixIcon: Icons.mail_outline_rounded,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
@@ -172,7 +176,7 @@ class _SignInScreenState extends State<SignInScreen> {
                     AuthTextField(
                       label: 'Password',
                       controller: _passwordController,
-                      hintText: '••••••••••••',
+                      hintText: 'Password',
                       prefixIcon: Icons.lock_outline_rounded,
                       obscureText: _obscurePassword,
                       textInputAction: TextInputAction.done,
@@ -182,7 +186,9 @@ class _SignInScreenState extends State<SignInScreen> {
                           setState(() => _obscurePassword = !_obscurePassword);
                         },
                         child: Icon(
-                          _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
                           color: AuthColors.inputIcon,
                           size: 20,
                         ),
@@ -195,7 +201,8 @@ class _SignInScreenState extends State<SignInScreen> {
                     Align(
                       alignment: Alignment.centerRight,
                       child: GestureDetector(
-                        onTap: () => Navigator.of(context).pushNamed('/forgot-password'),
+                        onTap: () => Navigator.of(context)
+                            .pushNamed(CampRoutes.forgotPassword),
                         child: Text(
                           'Forgot Password?',
                           style: GoogleFonts.manrope(
@@ -209,51 +216,18 @@ class _SignInScreenState extends State<SignInScreen> {
 
                     const SizedBox(height: 20),
 
-                    // ── Sign In CTA Button ───────────────────────────────────
+                    // ── Solid Orange Sign In CTA Button ──────────────────────
                     AuthPrimaryButton(
                       label: 'Sign In',
                       isLoading: _isLoading,
                       onTap: _handleSignIn,
                     ),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 14),
 
-                    // ── Express Tap Divider ──────────────────────────────────
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Container(
-                            height: 1,
-                            color: Colors.white.withValues(alpha: 0.12),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          child: Text(
-                            'OR EXPRESS TAP',
-                            style: GoogleFonts.manrope(
-                              color: AuthColors.textMuted,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: Container(
-                            height: 1,
-                            color: Colors.white.withValues(alpha: 0.12),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 18),
-
-                    // ── Biometric / Helmet Token Button ──────────────────────
-                    AuthExpressButton(
-                      isLoading: _isBiometricLoading,
-                      onTap: _handleBiometricTap,
+                    // ── Outlined Continue with Google Button ─────────────────
+                    AuthGoogleButton(
+                      onTap: _handleGoogleSignIn,
                     ),
                   ],
                 ),
@@ -265,100 +239,34 @@ class _SignInScreenState extends State<SignInScreen> {
     );
   }
 
-  /// Bottom Footer: "Don't have an account? Sign Up" + Status Bar
+  /// Bottom Footer: "Don't have an account? Sign Up"
   Widget _buildFooter(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16, top: 6),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Row: Don't have an account? Sign Up
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                "Don't have an account? ",
-                style: GoogleFonts.manrope(
-                  color: AuthColors.textFooter,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              GestureDetector(
-                onTap: () => Navigator.of(context).pushNamed('/sign-up'),
-                child: Text(
-                  'Sign Up',
-                  style: GoogleFonts.manrope(
-                    color: Colors.white,
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w800,
-                    decoration: TextDecoration.underline,
-                    decorationColor: AuthColors.orangeLight,
-                    decorationThickness: 2,
-                  ),
-                ),
-              ),
-            ],
+          Text(
+            "Don't have an account? ",
+            style: GoogleFonts.manrope(
+              color: AuthColors.textFooter,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-
-          const SizedBox(height: 12),
-
-          // Telemetry Status Row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Glowing Green Dot
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: AuthColors.statusGreen,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: AuthColors.statusGreen.withValues(alpha: 0.7),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
+          GestureDetector(
+            onTap: () => Navigator.of(context).pushNamed(CampRoutes.signUp),
+            child: Text(
+              'Sign Up',
+              style: GoogleFonts.manrope(
+                color: Colors.white,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w800,
+                decoration: TextDecoration.underline,
+                decorationColor: AuthColors.orangeLight,
+                decorationThickness: 2,
               ),
-              const SizedBox(width: 8),
-              Text(
-                'CAMP Network v4.2',
-                style: GoogleFonts.manrope(
-                  color: AuthColors.textMuted,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.3,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  '•',
-                  style: TextStyle(
-                    color: AuthColors.textMuted.withValues(alpha: 0.6),
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const Icon(
-                Icons.cloud_outlined,
-                color: AuthColors.textMuted,
-                size: 14,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'Telemetry Active',
-                style: GoogleFonts.manrope(
-                  color: AuthColors.textMuted,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ],
+            ),
           ),
         ],
       ),

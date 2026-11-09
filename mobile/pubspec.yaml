@@ -40,10 +40,26 @@ dependencies:
   latlong2: ^0.9.1
   http: ^1.2.0
   image_picker: ^1.1.2
+  geolocator: ^13.0.1
+  url_launcher: ^6.3.3
+  share_plus: ^13.3.1
+  wakelock_plus: ^1.8.1
+  shared_preferences: ^2.5.6
+  path_provider: ^2.1.5
+  flutter_local_notifications: ^22.3.2
+  pdf: ^3.13.1
+  printing: ^5.15.1
+  qr_flutter: ^4.1.0
+  gal: ^2.3.3
+  file_picker: ^13.1.0
+  package_info_plus: ^10.2.2
+  crypto: ^3.0.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  zxing2: ^0.2.4
+  image: ^4.12.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -51,6 +67,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -65,6 +82,7 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/icons/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -91,3 +109,8 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.png"

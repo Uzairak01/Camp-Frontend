@@ -12,6 +12,7 @@ class CampCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(AppColors.cardPadding),
     this.borderRadius = AppColors.radiusCard,
     this.color,
+    this.gradient,
     this.shadows,
     this.border,
     this.onTap,
@@ -22,6 +23,7 @@ class CampCard extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final double borderRadius;
   final Color? color;
+  final Gradient? gradient;
   final List<BoxShadow>? shadows;
   final BoxBorder? border;
   final VoidCallback? onTap;
@@ -32,7 +34,8 @@ class CampCard extends StatelessWidget {
     final card = Container(
       clipBehavior: clipBehavior,
       decoration: BoxDecoration(
-        color: color ?? AppColors.clay,
+        color: gradient == null ? (color ?? AppColors.clay) : null,
+        gradient: gradient,
         borderRadius: BorderRadius.circular(borderRadius),
         border: border,
         boxShadow: shadows ?? AppColors.skeuRaised,

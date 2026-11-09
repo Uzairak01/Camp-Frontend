@@ -1,10 +1,9 @@
 import 'package:camp/features/bike_scan/presentation/screens/add_motorcycle_screen.dart';
-import 'package:camp/features/bike_scan/presentation/screens/bike_scan_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('AddMotorcycleScreen renders all step 1 components and cards',
+  testWidgets('AddMotorcycleScreen renders cards and components with correct text',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.0;
@@ -15,69 +14,60 @@ void main() {
         initialRoute: '/add-bike',
         routes: {
           '/add-bike': (context) => const AddMotorcycleScreen(),
-          '/bike-scan': (context) => const BikeScanScreen(),
+          '/bike-scan': (context) => const Scaffold(body: Text('Bike Scan Mock')),
+          '/garage': (context) => const Scaffold(body: Text('Garage Mock')),
         },
       ),
     );
     await tester.pumpAndSettle();
 
-    // Verify Header
-    expect(find.text('CAMP'), findsOneWidget);
+    // Verify Header (Brand mark removed per BATCH UI-1)
+    expect(find.text('CAMP'), findsNothing);
     expect(find.text('ADD BIKE'), findsOneWidget);
     expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
-
-    // Verify Progress Row
-    expect(find.text('STEP 1 OF 4'), findsOneWidget);
 
     // Verify Title & Subtitle
     expect(find.text('Add a Motorcycle'), findsOneWidget);
     expect(
-      find.text(
-        'Choose how you would like to register your bike into the telemetry system.',
-      ),
+      find.text('Add a photo or enter details manually.'),
       findsOneWidget,
     );
 
-    // Verify Option 1: Scan with Camera + RECOMMENDED Badge
-    expect(find.text('Scan with Camera'), findsOneWidget);
-    expect(find.text('RECOMMENDED'), findsOneWidget);
+    // Verify Option 1: Take Bike Photo Card
+    expect(find.text('Take Bike Photo'), findsOneWidget);
     expect(
-      find.text('Instant VIN, ODO & telemetry recognition via CAMP AI Vision.'),
+      find.text('Take or choose a photo of your motorcycle'),
       findsOneWidget,
     );
     expect(find.byIcon(Icons.camera_alt_rounded), findsOneWidget);
 
-    // Verify Option 2: Upload Photo
-    expect(find.text('Upload Photo'), findsOneWidget);
+    // Verify Option 2: View Garage Card
+    expect(find.text('View Garage'), findsOneWidget);
     expect(
-      find.text(
-        'Analyze an existing photo or registration document from your mobile device gallery.',
-      ),
+      find.text('See your registered bikes'),
       findsOneWidget,
     );
-    expect(find.byIcon(Icons.photo_library_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.garage_rounded), findsOneWidget);
 
-    // Verify Option 3: Enter Manually
-    expect(find.text('Enter Manually'), findsOneWidget);
+    // Verify Tip Card
     expect(
-      find.text(
-        'Fill in make, model, displacement, specs, and maintenance logs step-by-step.',
-      ),
+      find.text('Tip: a clear side-view photo works best.'),
       findsOneWidget,
     );
-    expect(find.byIcon(Icons.edit_note_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.lightbulb_rounded), findsOneWidget);
 
-    // Verify Info Banner
-    expect(
-      find.text(
-        'Have your steering stem VIN plate or registration card accessible for 1-tap recognition.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.byIcon(Icons.info_outline_rounded), findsOneWidget);
+    // Verify Removed items are NOT on the screen
+    expect(find.textContaining('STEP', findRichText: true), findsNothing);
+    expect(find.textContaining('RECOMMENDED', findRichText: true), findsNothing);
+    expect(find.textContaining('Recommended', findRichText: true), findsNothing);
+    expect(find.text('Upload Photo'), findsNothing);
+    expect(find.text('Enter Manually'), findsNothing);
+    expect(find.textContaining('VIN', findRichText: true), findsNothing);
+    expect(find.textContaining('telemetry', findRichText: true), findsNothing);
+    expect(find.textContaining('AI Vision', findRichText: true), findsNothing);
   });
 
-  testWidgets('Tapping Scan with Camera navigates to BikeScanScreen',
+  testWidgets('Tapping Take Bike Photo navigates to the bike scan route',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.0;
@@ -88,25 +78,24 @@ void main() {
         initialRoute: '/add-bike',
         routes: {
           '/add-bike': (context) => const AddMotorcycleScreen(),
-          '/bike-scan': (context) => const BikeScanScreen(),
+          '/bike-scan': (context) => const Scaffold(body: Text('Bike Scan Mock')),
+          '/garage': (context) => const Scaffold(body: Text('Garage Mock')),
         },
       ),
     );
     await tester.pumpAndSettle();
 
-    // Tap Scan with Camera card
-    final scanCard = find.text('Scan with Camera');
+    // Tap Take Bike Photo card
+    final scanCard = find.text('Take Bike Photo');
     expect(scanCard, findsOneWidget);
     await tester.tap(scanCard);
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
 
-    // Verify BikeScanScreen reached
-    expect(find.text('TELEMETRY VISION 4.2'), findsOneWidget);
+    // Verify navigation to bike scan route
+    expect(find.text('Bike Scan Mock'), findsOneWidget);
   });
 
-  testWidgets('Tapping Upload Photo handles picker gracefully and Enter Manually shows toast',
+  testWidgets('Tapping View Garage navigates to the garage route',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 2.0;
@@ -117,22 +106,20 @@ void main() {
         initialRoute: '/add-bike',
         routes: {
           '/add-bike': (context) => const AddMotorcycleScreen(),
+          '/bike-scan': (context) => const Scaffold(body: Text('Bike Scan Mock')),
+          '/garage': (context) => const Scaffold(body: Text('Garage Mock')),
         },
       ),
     );
     await tester.pumpAndSettle();
 
-    // Tap Upload Photo (in test env without mock picker, completes gracefully without crash)
-    await tester.tap(find.text('Upload Photo'));
-    await tester.pump();
-    expect(find.text('Add a Motorcycle'), findsOneWidget);
+    // Tap View Garage card
+    final garageCard = find.text('View Garage');
+    expect(garageCard, findsOneWidget);
+    await tester.tap(garageCard);
+    await tester.pumpAndSettle();
 
-    // Tap Enter Manually
-    await tester.tap(find.text('Enter Manually'));
-    await tester.pump();
-    expect(
-      find.text('Manual vehicle entry wizard coming soon'),
-      findsOneWidget,
-    );
+    // Verify navigation to garage route
+    expect(find.text('Garage Mock'), findsOneWidget);
   });
 }
