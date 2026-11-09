@@ -44,6 +44,7 @@ key.properties
 local.properties
 SECRETS.md
 secrets.md
+AUDIT_REPORT.md
 
 # Node.js / Backend
 # -----------------
