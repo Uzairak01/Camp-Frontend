@@ -155,23 +155,6 @@ class _NavSearchBarState extends State<NavSearchBar> {
                   color: AppColors.mutedLight,
                   onPressed: _clearSearch,
                 ),
-              // Mic Icon (Voice Copilot placeholder)
-              IconButton(
-                icon: const Icon(
-                  Icons.mic_none_rounded,
-                  color: AppColors.mutedText,
-                  size: 22,
-                ),
-                onPressed: () {
-                  // TODO: Connect speech-to-text package when configured
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Voice input coming soon'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-              ),
               // Profile Avatar
               GestureDetector(
                 onTap: widget.onOpenProfile,

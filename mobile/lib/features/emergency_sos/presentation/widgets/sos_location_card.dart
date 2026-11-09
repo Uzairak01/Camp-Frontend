@@ -163,15 +163,18 @@ class _SosLocationCardState extends State<SosLocationCard> {
               const SizedBox(height: 14),
 
               // ── Location & Coordinates ─────────────────────────────────────
-              Text(
-                placeLabel,
-                style: GoogleFonts.manrope(
-                  color: const Color(0xFF1E293B),
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w800,
+              Semantics(
+                label: placeLabel,
+                child: Text(
+                  placeLabel,
+                  style: GoogleFonts.manrope(
+                    color: const Color(0xFF1E293B),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 3),
               Text(

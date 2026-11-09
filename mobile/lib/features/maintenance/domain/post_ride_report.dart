@@ -125,10 +125,11 @@ class PostRideReport {
     return notes ?? flaggedIssues;
   }
 
-  /// Formatted date string (e.g., 'Oct 14, 2026').
+  /// Formatted date string in the phone's local time (e.g., 'Oct 14, 2026').
   String get formattedDate {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+    final local = date.toLocal();
+    return '${months[local.month - 1]} ${local.day}, ${local.year}';
   }
 
   /// Primary terrain tag or 'Mixed'.

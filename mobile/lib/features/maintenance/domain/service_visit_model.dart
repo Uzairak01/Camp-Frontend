@@ -98,11 +98,12 @@ class ServiceVisit {
   /// True if valid geographic coordinates are stored for navigation.
   bool get hasCoordinates => latitude != null && longitude != null;
 
-  /// Human-readable date and time e.g. "Oct 24, 2026 • 10:00 AM".
+  /// Human-readable date and time e.g. "Oct 24, 2026 • 10:00 AM" in local time.
   String get formattedDateTime {
-    final dateStr = formatTripDate(dateTime);
-    final hour = dateTime.hour;
-    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final local = dateTime.toLocal();
+    final dateStr = formatTripDate(local);
+    final hour = local.hour;
+    final minute = local.minute.toString().padLeft(2, '0');
     final period = hour >= 12 ? 'PM' : 'AM';
     final standardHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
     return '$dateStr • $standardHour:$minute $period';

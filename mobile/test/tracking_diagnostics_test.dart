@@ -251,6 +251,51 @@ void main() {
       expect(log, contains('[REJECTED]'));
       expect(log, contains('[GAP] ⚠️ 40s elapsed'));
     });
+
+    test('formatLogAsPlainText with oldestFirst true contains all events and starts with oldest', () {
+      final diag = TrackingDiagnostics.instance;
+      final t0 = DateTime(2026, 11, 1, 10, 0, 0);
+
+      // Record 120 events to verify complete export with no arbitrary size capping
+      for (int i = 0; i < 120; i++) {
+        diag.recordFix(
+          timestamp: t0.add(Duration(seconds: i * 5)),
+          latitude: 31.52000 + (i * 0.0001),
+          longitude: 74.35000 + (i * 0.0001),
+          accuracy: 10.0,
+          speed: 8.0,
+          accepted: true,
+          reason: 'Waypoint #$i',
+          segmentMeters: 10.0,
+        );
+      }
+
+      expect(diag.events.length, equals(120));
+
+      // Test default/newest-first (for Copy log)
+      final newestFirstLog = diag.formatLogAsPlainText(oldestFirst: false);
+      expect(newestFirstLog, contains('=== EVENTS (120 of 500, newest first) ==='));
+      final newestFirstIdxOldest = newestFirstLog.indexOf('Waypoint #0');
+      final newestFirstIdxNewest = newestFirstLog.indexOf('Waypoint #119');
+      expect(newestFirstIdxNewest, isNot(-1));
+      expect(newestFirstIdxOldest, isNot(-1));
+      // In newest-first, Waypoint #119 appears before Waypoint #0
+      expect(newestFirstIdxNewest, lessThan(newestFirstIdxOldest));
+
+      // Test oldest-first export (for file export)
+      final oldestFirstLog = diag.formatLogAsPlainText(oldestFirst: true);
+      expect(oldestFirstLog, contains('=== EVENTS (120 of 500, oldest first) ==='));
+
+      // Check all 120 events are present (not capped by any string/count limit)
+      for (int i = 0; i < 120; i++) {
+        expect(oldestFirstLog, contains('Waypoint #$i'));
+      }
+
+      final oldestFirstIdxOldest = oldestFirstLog.indexOf('Waypoint #0');
+      final oldestFirstIdxNewest = oldestFirstLog.indexOf('Waypoint #119');
+      // In oldest-first, Waypoint #0 (the oldest event) appears before Waypoint #119 (the newest event)
+      expect(oldestFirstIdxOldest, lessThan(oldestFirstIdxNewest));
+    });
   });
 
   group('TrackingDiagnostics Widget & Visibility Tests', () {
@@ -348,6 +393,8 @@ void main() {
 
       // Verify buttons
       expect(find.byKey(const ValueKey('tracking_diag_copy_button')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('tracking_diag_share_file_button')),
           findsOneWidget);
       expect(find.byKey(const ValueKey('tracking_diag_clear_button')),
           findsOneWidget);
@@ -485,6 +532,30 @@ void main() {
 
       expect(find.byKey(const ValueKey('settings_tracking_diagnostics_row')),
           findsOneWidget);
+    });
+
+    testWidgets(
+        'tracking diagnostics screen renders Share log as file button and does not overflow on 360px screen',
+        (tester) async {
+      tester.view.physicalSize = const Size(360, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: TrackingDiagnosticsScreen(isDebugMode: true),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('tracking_diag_copy_button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tracking_diag_share_file_button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('tracking_diag_clear_button')), findsOneWidget);
+      expect(find.text('Share log as file'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 }

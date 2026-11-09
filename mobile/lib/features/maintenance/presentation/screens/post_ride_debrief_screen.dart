@@ -7,6 +7,7 @@ import '../../../../core/widgets/camp_card.dart';
 import '../../../../core/widgets/inset_tile.dart';
 import '../../../../core/widgets/multi_select_chip_row.dart';
 import '../../../garage/controllers/active_bike_controller.dart';
+import '../../../garage/services/fuel_tracker_service.dart';
 import '../../controllers/post_ride_report_controller.dart';
 import '../../domain/post_ride_report.dart';
 
@@ -39,7 +40,7 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
     super.initState();
     if (widget.initialReport != null) {
       final rep = widget.initialReport!;
-      _selectedDate = rep.date;
+      _selectedDate = rep.date.toLocal();
       _distanceController.text = rep.distanceKm > 0
           ? (rep.distanceKm == rep.distanceKm.roundToDouble()
               ? rep.distanceKm.toStringAsFixed(0)
@@ -158,17 +159,16 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
       // Only adjust odometer if this was a manual report! Tracked reports never touch odometer.
       if (widget.initialReport!.source != 'tracked') {
         final diff = distance - widget.initialReport!.distanceKm;
-        if (diff != 0) {
-          final bike = ActiveBikeController.instance.getBikeById(targetBikeId);
-          if (bike != null) {
-            final newOdo = bike.odometerKm + diff.round();
-            final updatedBike = bike.copyWith(
-              odometerKm: newOdo,
-              preciseOdometerKm: newOdo.toDouble(),
-              lastUpdated: DateTime.now(),
-            );
-            ActiveBikeController.instance.updateBike(updatedBike);
-          }
+        if (diff > 0) {
+          FuelTrackerService.instance.applyDistanceToBike(
+            bikeId: targetBikeId,
+            distanceKm: diff,
+          );
+        } else if (diff < 0) {
+          FuelTrackerService.instance.subtractDistanceFromBike(
+            bikeId: targetBikeId,
+            kmToRemove: -diff,
+          );
         }
       }
     } else {
@@ -187,16 +187,10 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
       );
       PostRideReportController.instance.addReport(report);
 
-      final bike = ActiveBikeController.instance.getBikeById(targetBikeId);
-      if (bike != null) {
-        final newOdo = bike.odometerKm + distance.round();
-        final updatedBike = bike.copyWith(
-          odometerKm: newOdo,
-          preciseOdometerKm: newOdo.toDouble(),
-          lastUpdated: DateTime.now(),
-        );
-        ActiveBikeController.instance.updateBike(updatedBike);
-      }
+      FuelTrackerService.instance.applyDistanceToBike(
+        bikeId: targetBikeId,
+        distanceKm: distance,
+      );
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -217,7 +211,8 @@ class _PostRideDebriefScreenState extends State<PostRideDebriefScreen> {
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
-    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+    final local = dt.toLocal();
+    return '${months[local.month - 1]} ${local.day}, ${local.year}';
   }
 
   @override

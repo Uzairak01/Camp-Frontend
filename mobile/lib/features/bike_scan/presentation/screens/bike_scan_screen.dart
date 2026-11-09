@@ -10,8 +10,27 @@ import '../../../../app/theme/app_colors.dart';
 import '../../../../core/utils/image_storage_helper.dart';
 import '../../../../core/widgets/primary_button.dart';
 import '../../controllers/bike_onboarding_controller.dart';
+import '../../domain/camera_permission_service.dart';
 import '../../utils/gallery_picker_helper.dart';
 import 'bike_details_screen.dart';
+
+/// Distinct failure and permission states for the camera screen.
+enum CameraScreenErrorState {
+  /// No error; camera is active or initializing.
+  none,
+
+  /// Camera permission was denied; user can be prompted to grant permission.
+  permissionDenied,
+
+  /// Camera permission was permanently denied; user must open device settings.
+  permissionPermanentlyDenied,
+
+  /// No camera hardware found on the device.
+  noCameraHardware,
+
+  /// Camera hardware is available and permission is granted, but starting failed.
+  initializationError,
+}
 
 /// CAMP Bike Photo Screen — camera flow that connects to the Bike Details form.
 ///
@@ -20,6 +39,8 @@ import 'bike_details_screen.dart';
 ///   [cameraAvailable] — injectable for widget tests (defaults to runtime detection).
 ///   [camerasFetcher] — injectable camera loader for widget tests (e.g. slow-start testing).
 ///   [cameraController] — injectable camera controller for widget tests.
+///   [permissionService] — injectable camera permission service for tests.
+///   [controllerCreator] — injectable controller factory for testing initialization failures.
 class BikeScanScreen extends StatefulWidget {
   const BikeScanScreen({
     super.key,
@@ -27,6 +48,8 @@ class BikeScanScreen extends StatefulWidget {
     this.cameraAvailable,
     this.camerasFetcher,
     this.cameraController,
+    this.permissionService,
+    this.controllerCreator,
   });
 
   final String? imagePath;
@@ -40,6 +63,12 @@ class BikeScanScreen extends StatefulWidget {
   /// Injected camera controller (e.g. for tests).
   final CameraController? cameraController;
 
+  /// Injected camera permission service (e.g. for tests).
+  final CameraPermissionService? permissionService;
+
+  /// Injected controller creator (e.g. to simulate controller.initialize() errors).
+  final CameraController Function(CameraDescription description)? controllerCreator;
+
   @override
   State<BikeScanScreen> createState() => _BikeScanScreenState();
 }
@@ -50,11 +79,12 @@ class _BikeScanScreenState extends State<BikeScanScreen>
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _isCameraLoading = true;
-  bool _cameraError = false;
-  bool _permissionDenied = false;
+  CameraScreenErrorState _errorState = CameraScreenErrorState.none;
   bool _isFlashOn = false;
   bool _isFrontCamera = false;
   List<CameraDescription> _cameras = [];
+
+  late final CameraPermissionService _permissionService;
 
   // ── Screen state ──────────────────────────────────────────────────────────
   String? _capturedImagePath;
@@ -65,6 +95,8 @@ class _BikeScanScreenState extends State<BikeScanScreen>
   @override
   void initState() {
     super.initState();
+    _permissionService =
+        widget.permissionService ?? const MethodChannelCameraPermissionService();
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -82,7 +114,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
         _capturedImagePath = initPath;
         _isCameraLoading = false;
       } else {
-        _initializeCamera();
+        _checkPermissionAndInitialize();
       }
     }
   }
@@ -106,7 +138,9 @@ class _BikeScanScreenState extends State<BikeScanScreen>
         state == AppLifecycleState.paused) {
       _disposeCamera();
     } else if (state == AppLifecycleState.resumed && !_hasPhoto) {
-      _initializeCamera();
+      // When resuming from background or settings, re-check permission and start camera
+      // automatically if permission was granted.
+      _checkPermissionAndInitialize();
     }
   }
 
@@ -129,13 +163,14 @@ class _BikeScanScreenState extends State<BikeScanScreen>
     }
   }
 
-  Future<void> _initializeCamera() async {
+  /// Explicitly requests camera permission before controller initialization,
+  /// awaiting the result so the live camera starts immediately upon granting.
+  Future<void> _checkPermissionAndInitialize() async {
     if (!mounted) return;
     setState(() {
       _isCameraLoading = true;
       _isCameraInitialized = false;
-      _cameraError = false;
-      _permissionDenied = false;
+      _errorState = CameraScreenErrorState.none;
     });
 
     // Respect the injected override (useful for tests).
@@ -143,10 +178,52 @@ class _BikeScanScreenState extends State<BikeScanScreen>
       if (!mounted) return;
       setState(() {
         _isCameraLoading = false;
-        _cameraError = true;
+        _errorState = CameraScreenErrorState.noCameraHardware;
       });
       return;
     }
+
+    final currentPermission = await _permissionService.checkPermission();
+    if (!mounted) return;
+
+    if (currentPermission == CameraPermissionStatus.denied) {
+      // First-time or not yet granted: request permission explicitly before initializing
+      final requestedStatus = await _permissionService.requestPermission();
+      if (!mounted) return;
+
+      if (requestedStatus == CameraPermissionStatus.denied) {
+        setState(() {
+          _isCameraLoading = false;
+          _errorState = CameraScreenErrorState.permissionDenied;
+        });
+        return;
+      } else if (requestedStatus == CameraPermissionStatus.permanentlyDenied) {
+        setState(() {
+          _isCameraLoading = false;
+          _errorState = CameraScreenErrorState.permissionPermanentlyDenied;
+        });
+        return;
+      }
+      // If granted, proceed to start camera immediately!
+    } else if (currentPermission == CameraPermissionStatus.permanentlyDenied) {
+      setState(() {
+        _isCameraLoading = false;
+        _errorState = CameraScreenErrorState.permissionPermanentlyDenied;
+      });
+      return;
+    }
+
+    // Permission is granted; query hardware and start camera controller.
+    await _startCamera();
+  }
+
+  /// Queries available camera hardware and creates the controller.
+  Future<void> _startCamera() async {
+    if (!mounted) return;
+    setState(() {
+      _isCameraLoading = true;
+      _errorState = CameraScreenErrorState.none;
+    });
 
     try {
       List<CameraDescription> cameras;
@@ -160,8 +237,14 @@ class _BikeScanScreenState extends State<BikeScanScreen>
       } on MissingPluginException {
         throw Exception('camera_plugin_unavailable');
       }
+
       if (cameras.isEmpty) {
-        throw Exception('no_camera');
+        if (!mounted) return;
+        setState(() {
+          _isCameraLoading = false;
+          _errorState = CameraScreenErrorState.noCameraHardware;
+        });
+        return;
       }
 
       _cameras = cameras;
@@ -175,21 +258,11 @@ class _BikeScanScreenState extends State<BikeScanScreen>
       );
 
       await _disposeAndCreateController(desc);
-    } on CameraException catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _isCameraLoading = false;
-        _cameraError = true;
-        _permissionDenied = e.code.contains('permission');
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _isCameraLoading = false;
-        _cameraError = true;
-        _permissionDenied =
-            e.toString().contains('permission') ||
-            e.toString().contains('denied');
+        _errorState = CameraScreenErrorState.initializationError;
       });
     }
   }
@@ -204,11 +277,13 @@ class _BikeScanScreenState extends State<BikeScanScreen>
     if (!mounted) return;
 
     final controller = widget.cameraController ??
-        CameraController(
-          desc,
-          ResolutionPreset.high,
-          enableAudio: false,
-        );
+        (widget.controllerCreator != null
+            ? widget.controllerCreator!(desc)
+            : CameraController(
+                desc,
+                ResolutionPreset.high,
+                enableAudio: false,
+              ));
     _cameraController = controller;
 
     try {
@@ -217,11 +292,11 @@ class _BikeScanScreenState extends State<BikeScanScreen>
           const Duration(seconds: 8),
         );
       }
-    } on MissingPluginException {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _isCameraLoading = false;
-        _cameraError = true;
+        _errorState = CameraScreenErrorState.initializationError;
       });
       return;
     }
@@ -235,7 +310,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
     setState(() {
       _isCameraInitialized = true;
       _isCameraLoading = false;
-      _cameraError = false;
+      _errorState = CameraScreenErrorState.none;
     });
   }
 
@@ -244,7 +319,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
     setState(() {
       _isFrontCamera = !_isFrontCamera;
     });
-    await _initializeCamera();
+    await _startCamera();
   }
 
   Future<void> _toggleFlash() async {
@@ -283,7 +358,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
       _capturedImagePath = null;
     });
     if (!_isCameraInitialized) {
-      _initializeCamera();
+      _checkPermissionAndInitialize();
     }
   }
 
@@ -433,7 +508,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
         ),
       );
     }
-    // No camera / permission denied.
+    // No camera / error / permission denied.
     return const ColoredBox(color: Colors.black);
   }
 
@@ -534,7 +609,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
   // ── Bottom Controls ───────────────────────────────────────────────────────
 
   Widget _buildBottomControls() {
-    if (_cameraError && !_hasPhoto) {
+    if (_errorState != CameraScreenErrorState.none && !_hasPhoto) {
       return _buildNoCameraControls();
     }
 
@@ -556,12 +631,63 @@ class _BikeScanScreenState extends State<BikeScanScreen>
     );
   }
 
+  /// Builds state-specific error controls:
+  /// (a) permission denied: "Camera permission is needed to scan" with "Grant permission",
+  ///     or "Open app settings" when permanently denied.
+  /// (b) no camera hardware: "Camera unavailable on this device."
+  /// (c) initialization failure: "Couldn't start the camera. Try again" with "Retry".
+  /// "Enter details manually" and the gallery button stay present in every state.
   Widget _buildNoCameraControls() {
+    String message;
+    Widget? actionButton;
+
+    switch (_errorState) {
+      case CameraScreenErrorState.permissionDenied:
+        message = 'Camera permission is needed to scan';
+        actionButton = PrimaryButton(
+          label: 'Grant permission',
+          icon: Icons.camera_alt_rounded,
+          onTap: () async {
+            final status = await _permissionService.requestPermission();
+            if (!mounted) return;
+            if (status == CameraPermissionStatus.granted) {
+              await _startCamera();
+            } else if (status == CameraPermissionStatus.permanentlyDenied) {
+              setState(() {
+                _errorState = CameraScreenErrorState.permissionPermanentlyDenied;
+              });
+            }
+          },
+        );
+        break;
+      case CameraScreenErrorState.permissionPermanentlyDenied:
+        message = 'Camera permission is needed to scan';
+        actionButton = PrimaryButton(
+          label: 'Open app settings',
+          icon: Icons.settings_rounded,
+          onTap: () => _permissionService.openAppSettings(),
+        );
+        break;
+      case CameraScreenErrorState.initializationError:
+        message = "Couldn't start the camera. Try again";
+        actionButton = PrimaryButton(
+          label: 'Retry',
+          icon: Icons.refresh_rounded,
+          onTap: () => _checkPermissionAndInitialize(),
+        );
+        break;
+      case CameraScreenErrorState.noCameraHardware:
+      case CameraScreenErrorState.none:
+        message = 'Camera unavailable on this device.';
+        actionButton = null;
+        break;
+    }
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'Camera unavailable on this device.',
+          message,
           textAlign: TextAlign.center,
           style: GoogleFonts.manrope(
             color: Colors.white70,
@@ -569,14 +695,11 @@ class _BikeScanScreenState extends State<BikeScanScreen>
             fontWeight: FontWeight.w500,
           ),
         ),
-        const SizedBox(height: 16),
-        if (_permissionDenied)
-          PrimaryButton(
-            label: 'Open Settings',
-            icon: Icons.settings_rounded,
-            onTap: () => openAppSettings(),
-          ),
-        if (_permissionDenied) const SizedBox(height: 10),
+        if (actionButton != null) ...[
+          const SizedBox(height: 16),
+          actionButton,
+        ],
+        const SizedBox(height: 12),
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
@@ -607,7 +730,7 @@ class _BikeScanScreenState extends State<BikeScanScreen>
           ),
         ),
         const SizedBox(height: 12),
-        // Gallery still accessible
+        // Gallery button stays accessible across all error and permission states.
         _galleryButton(),
       ],
     );
@@ -698,17 +821,5 @@ class _BikeScanScreenState extends State<BikeScanScreen>
       onTap: _openBikeDetails,
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
     );
-  }
-
-  // ── Permissions ────────────────────────────────────────────────────────────
-  /// Opens the platform app-settings page when camera permission is denied.
-  void openAppSettings() {
-    // Attempt to open settings through a platform channel.  The camera package
-    // does not expose this directly; we call the intent ourselves.
-    try {
-      SystemChannels.platform.invokeMethod<void>('SystemNavigator.push');
-    } catch (_) {
-      // Silently ignore on platforms that don't support it.
-    }
   }
 }

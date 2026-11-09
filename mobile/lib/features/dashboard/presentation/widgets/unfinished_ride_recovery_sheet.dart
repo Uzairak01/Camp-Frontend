@@ -32,9 +32,10 @@ class UnfinishedRideRecoverySheet extends StatelessWidget {
   }
 
   String _formatTime(DateTime dt) {
-    final hour = dt.hour == 0 ? 12 : (dt.hour > 12 ? dt.hour - 12 : dt.hour);
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final amPm = dt.hour >= 12 ? 'PM' : 'AM';
+    final local = dt.toLocal();
+    final hour = local.hour == 0 ? 12 : (local.hour > 12 ? local.hour - 12 : local.hour);
+    final minute = local.minute.toString().padLeft(2, '0');
+    final amPm = local.hour >= 12 ? 'PM' : 'AM';
     return '$hour:$minute $amPm';
   }
 
@@ -189,9 +190,18 @@ class UnfinishedRideRecoverySheet extends StatelessWidget {
 
           // "Discard" Action Button
           OutlinedButton(
+            key: const ValueKey('unfinished_ride_discard_button'),
             onPressed: () async {
-              Navigator.of(context).pop();
-              await FuelTrackerService.instance.discardSavedRide();
+              final confirmed =
+                  await RideSummarySheet.showDiscardConfirmationDialog(
+                context,
+                distanceKm: savedRide.appliedToOdometerKm,
+              );
+              if (!confirmed) return;
+              if (context.mounted) {
+                Navigator.of(context).pop();
+              }
+              await FuelTrackerService.instance.discardSavedRide(savedRide);
             },
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.mutedText,

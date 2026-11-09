@@ -24,6 +24,10 @@ class FakeLocationService implements LocationService {
   PositionData? _currentPosition;
   bool hasPermission;
   bool serviceEnabled;
+  bool? lastHighAccuracy;
+  bool? lastEnableForegroundNotification;
+  bool? lastForceLocationManager;
+  int streamSubscriptionCount = 0;
   final StreamController<PositionData> _controller =
       StreamController<PositionData>.broadcast();
 
@@ -55,7 +59,12 @@ class FakeLocationService implements LocationService {
   Stream<PositionData> getPositionStream({
     bool highAccuracy = false,
     bool enableForegroundNotification = false,
+    bool? forceLocationManager,
   }) {
+    lastHighAccuracy = highAccuracy;
+    lastEnableForegroundNotification = enableForegroundNotification;
+    lastForceLocationManager = forceLocationManager ?? false;
+    streamSubscriptionCount++;
     return _controller.stream;
   }
 

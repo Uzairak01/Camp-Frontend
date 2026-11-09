@@ -157,9 +157,10 @@ const List<String> kTripMonths = [
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
-/// Formats a [DateTime] into "MMM d, y" (e.g. "Oct 12, 2026").
+/// Formats a [DateTime] into "MMM d, y" (e.g. "Oct 12, 2026") in local time.
 String formatTripDate(DateTime dt) {
-  return '${kTripMonths[dt.month - 1]} ${dt.day}, ${dt.year}';
+  final local = dt.toLocal();
+  return '${kTripMonths[local.month - 1]} ${local.day}, ${local.year}';
 }
 
 /// Tolerantly parses a date string in "MMM d, y", "yyyy-MM-dd", or ISO format.

@@ -148,14 +148,17 @@ class NavLocationSheet extends StatelessWidget {
                       child: Row(
                         children: [
                           Flexible(
-                            child: Text(
-                              controller.currentLocationName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.darkCharcoal,
+                            child: Semantics(
+                              label: controller.currentLocationName,
+                              child: Text(
+                                controller.currentLocationName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.darkCharcoal,
+                                ),
                               ),
                             ),
                           ),

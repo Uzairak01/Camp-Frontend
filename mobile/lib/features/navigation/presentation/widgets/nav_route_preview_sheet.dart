@@ -67,7 +67,7 @@ class NavRoutePreviewSheet extends StatelessWidget {
             ),
           ),
 
-          // ── Network Error / Offline State ──────────────────────────────────
+          // ── Bottom Area: Exactly ONE of Error, Calculating, or Route Metrics ──
           if (error != null) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -113,9 +113,9 @@ class NavRoutePreviewSheet extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
-          ] else if (isCalc) ...[
+          ] else if (isCalc || route == null) ...[
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
+              padding: EdgeInsets.symmetric(vertical: 16),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -128,18 +128,43 @@ class NavRoutePreviewSheet extends StatelessWidget {
                     ),
                   ),
                   SizedBox(width: 12),
-                  Text(
-                    'Calculating fastest road route...',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.mutedText,
+                  Flexible(
+                    child: Text(
+                      'Calculating fastest road route...',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.mutedText,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
               ),
             ),
-          ] else if (route != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: null,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+                  disabledBackgroundColor: const Color(0xFFE5E7EB),
+                  disabledForegroundColor: AppColors.mutedText,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                child: const Text(
+                  'Calculating...',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          ] else ...[
             // ── Metrics Row: Duration + Distance and Fuel Estimate Tile ────────
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -246,7 +271,7 @@ class NavRoutePreviewSheet extends StatelessWidget {
                   child: ElevatedButton(
                     onPressed: onStartNavigation,
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
                       backgroundColor: AppColors.tacticalOrange,
                       foregroundColor: Colors.white,
                       elevation: 4,
@@ -255,19 +280,23 @@ class NavRoutePreviewSheet extends StatelessWidget {
                         borderRadius: BorderRadius.circular(20),
                       ),
                     ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.navigation_rounded, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'Start',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
+                    child: const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.navigation_rounded, size: 20),
+                          SizedBox(width: 6),
+                          Text(
+                            'Start',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),

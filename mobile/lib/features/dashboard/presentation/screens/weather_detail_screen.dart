@@ -197,32 +197,43 @@ class _WeatherDetailScreenState extends State<WeatherDetailScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'CURRENT AREA',
-                      style: GoogleFonts.manrope(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.tacticalOrange,
-                        letterSpacing: 0.8,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'CURRENT AREA',
+                        style: GoogleFonts.manrope(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.tacticalOrange,
+                          letterSpacing: 0.8,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      data.locationName ??
-                          (WeatherProvider.currentLocationLabel.isNotEmpty
-                              ? WeatherProvider.currentLocationLabel
-                              : 'Local Area'),
-                      style: GoogleFonts.manrope(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
+                      const SizedBox(height: 4),
+                      Semantics(
+                        label: data.locationName ??
+                            (WeatherProvider.currentLocationLabel.isNotEmpty
+                                ? WeatherProvider.currentLocationLabel
+                                : 'Local Area'),
+                        child: Text(
+                          data.locationName ??
+                              (WeatherProvider.currentLocationLabel.isNotEmpty
+                                  ? WeatherProvider.currentLocationLabel
+                                  : 'Local Area'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.manrope(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 12),
                 Container(
                   width: 48,
                   height: 48,

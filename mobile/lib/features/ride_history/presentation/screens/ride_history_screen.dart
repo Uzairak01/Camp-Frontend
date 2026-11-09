@@ -29,8 +29,9 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
   String? _selectedTerrain;
 
   Future<void> _shareRide(PostRideReport report) async {
+    final localDate = report.date.toLocal();
     final dateStr =
-        '${report.date.year}-${report.date.month.toString().padLeft(2, '0')}-${report.date.day.toString().padLeft(2, '0')}';
+        '${localDate.year}-${localDate.month.toString().padLeft(2, '0')}-${localDate.day.toString().padLeft(2, '0')}';
     final activeBike = ActiveBikeController.instance.activeBike;
     final bikeName = activeBike != null
         ? '${activeBike.make} ${activeBike.modelName}'
@@ -281,13 +282,14 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                                   setState(() => _selectedTerrain = null),
                             ),
                           ] else ...[
-                            ...filteredReports.map(
-                              (report) => Padding(
+                            ...filteredReports.map((report) {
+                              final localDate = report.date.toLocal();
+                              return Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
                                 child: ExpeditionCardWidget(
                                   log: ExpeditionLog(
                                     date:
-                                        '${report.date.month}/${report.date.day}/${report.date.year}',
+                                        '${localDate.month}/${localDate.day}/${localDate.year}',
                                     tag: report.terrainTags.isNotEmpty
                                         ? report.terrainTags.first
                                         : (report.terrain.isNotEmpty
@@ -297,7 +299,7 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                                     icon: Icons.terrain_rounded,
                                     title: report.notes?.isNotEmpty == true
                                         ? report.notes!
-                                        : 'Ride on ${report.date.month}/${report.date.day}',
+                                        : 'Ride on ${localDate.month}/${localDate.day}',
                                     route:
                                         '${report.distanceKm.toStringAsFixed(1)} km',
                                     bike: activeBike != null
@@ -329,8 +331,8 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                                   onDelete: () =>
                                       _confirmAndDeleteRide(report),
                                 ),
-                              ),
-                            ),
+                              );
+                            }),
                           ],
                         ],
                       );

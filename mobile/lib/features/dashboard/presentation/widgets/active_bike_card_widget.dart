@@ -345,25 +345,7 @@ class _ActiveBikeCardWidgetState extends State<ActiveBikeCardWidget>
                       ),
                       onPressed: () async {
                         if (fuelTracker.isRiding) {
-                          final report = await fuelTracker.finishRide();
-                          if (context.mounted) {
-                            if (report != null) {
-                              RideSummarySheet.show(context, report);
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Ride too short to record',
-                                    style: GoogleFonts.manrope(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  backgroundColor: AppColors.darkCharcoal,
-                                  behavior: SnackBarBehavior.floating,
-                                ),
-                              );
-                            }
-                          }
+                          await RideSummarySheet.finishRideAndShowSummary(context);
                         } else {
                           await fuelTracker.startRide();
                         }

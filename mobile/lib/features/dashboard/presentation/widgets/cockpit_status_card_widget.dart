@@ -256,6 +256,8 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
                               }
                               return Text(
                                 bikeLine,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                                 style: GoogleFonts.manrope(
                                   color: const Color(0xFF94A3B8),
                                   fontSize: 12,
@@ -274,31 +276,43 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
               // ── Status Tag Pills: Time, Location, Weather, Distance ───────
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _darkPill(Icons.access_time_rounded, _timeString),
-                    _darkPill(
-                      Icons.location_on_rounded,
-                      locationLabel,
-                      onTap: currentPlace.isLocationOff
-                          ? () => currentPlace.showLocationOffHint(context)
-                          : () => Navigator.of(context)
-                              .pushNamed(CampRoutes.navigationMap),
-                    ),
-                    _darkPill(
-                      Icons.wb_sunny_rounded,
-                      weatherText,
-                      onTap: () => Navigator.of(context)
-                          .pushNamed(CampRoutes.weatherDetail),
-                    ),
-                    if (activeBike != null)
-                      _darkPill(
-                        Icons.two_wheeler_rounded,
-                        '${activeBike.odometerKm} km logged',
-                      ),
-                  ],
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final maxPillWidth = constraints.maxWidth;
+                    return Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _darkPill(
+                          Icons.access_time_rounded,
+                          _timeString,
+                          maxWidth: maxPillWidth,
+                        ),
+                        _darkPill(
+                          Icons.location_on_rounded,
+                          locationLabel,
+                          maxWidth: maxPillWidth,
+                          onTap: currentPlace.isLocationOff
+                              ? () => currentPlace.showLocationOffHint(context)
+                              : () => Navigator.of(context)
+                                  .pushNamed(CampRoutes.navigationMap),
+                        ),
+                        _darkPill(
+                          Icons.wb_sunny_rounded,
+                          weatherText,
+                          maxWidth: maxPillWidth,
+                          onTap: () => Navigator.of(context)
+                              .pushNamed(CampRoutes.weatherDetail),
+                        ),
+                        if (activeBike != null)
+                          _darkPill(
+                            Icons.two_wheeler_rounded,
+                            '${activeBike.odometerKm} km logged',
+                            maxWidth: maxPillWidth,
+                          ),
+                      ],
+                    );
+                  },
                 ),
               ),
 
@@ -385,33 +399,63 @@ class _CockpitStatusCardWidgetState extends State<CockpitStatusCardWidget> {
     );
   }
 
-  Widget _darkPill(IconData icon, String label, {VoidCallback? onTap}) {
-    final pillContent = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: AppColors.statusYellow),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            maxLines: 1,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
-            style: GoogleFonts.manrope(
-              color: const Color(0xFFE5E7EB),
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
+  Widget _darkPill(
+    IconData icon,
+    String label, {
+    VoidCallback? onTap,
+    double? maxWidth,
+  }) {
+    // Retain full place label in the Semantics tree for screen readers
+    // even when visually truncated with ellipsis.
+    final textWidget = Semantics(
+      label: label,
+      child: Text(
+        label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+        style: GoogleFonts.manrope(
+          color: const Color(0xFFE5E7EB),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
+
+    Widget buildPill(BoxConstraints constraints) {
+      final effectiveMaxWidth = (maxWidth != null && maxWidth.isFinite)
+          ? maxWidth
+          : (constraints.maxWidth.isFinite ? constraints.maxWidth : null);
+
+      return Container(
+        constraints: effectiveMaxWidth != null
+            ? BoxConstraints(maxWidth: effectiveMaxWidth)
+            : null,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5.5),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: AppColors.statusYellow),
+            const SizedBox(width: 6),
+            if (effectiveMaxWidth != null)
+              Flexible(child: textWidget)
+            else
+              textWidget,
+          ],
+        ),
+      );
+    }
+
+    final pillContent = maxWidth != null
+        ? buildPill(BoxConstraints(maxWidth: maxWidth))
+        : LayoutBuilder(
+            builder: (context, constraints) => buildPill(constraints),
+          );
 
     if (onTap != null) {
       return GestureDetector(

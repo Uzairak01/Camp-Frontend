@@ -72,6 +72,7 @@ class _FakeLocationService implements LocationService {
   Stream<PositionData> getPositionStream({
     bool highAccuracy = false,
     bool enableForegroundNotification = false,
+    bool? forceLocationManager,
   }) async* {
     if (position != null) yield position!;
   }

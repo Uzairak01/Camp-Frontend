@@ -21,7 +21,19 @@ class NavRoutePreviewPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final route = controller.route;
-    final durationText = route?.formattedDuration ?? 'Calculating...';
+    final error = controller.routeError;
+    final isCalc = controller.isCalculatingRoute;
+
+    // Show duration if route is ready; if location is unavailable or error,
+    // do NOT say "Calculating...", display "Location unavailable".
+    final String durationText;
+    if (error != null || controller.latestGoodPosition == null) {
+      durationText = 'Location unavailable';
+    } else if (isCalc || route == null) {
+      durationText = 'Calculating...';
+    } else {
+      durationText = route.formattedDuration;
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),

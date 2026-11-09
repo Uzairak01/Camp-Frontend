@@ -1,6 +1,23 @@
 import 'package:camp/features/navigation/domain/routing_service.dart';
 import 'package:latlong2/latlong.dart';
 
+/// Captured parameters from a single [FakeRoutingService.getRoute] invocation.
+class FakeRouteRequest {
+  const FakeRouteRequest({
+    required this.waypoints,
+    required this.requestAlternatives,
+    required this.startBearingDegrees,
+    required this.startBearingToleranceDegrees,
+    required this.startRadiusMeters,
+  });
+
+  final List<LatLng> waypoints;
+  final bool requestAlternatives;
+  final double? startBearingDegrees;
+  final double startBearingToleranceDegrees;
+  final double? startRadiusMeters;
+}
+
 /// Fake implementation of [RoutingService] for unit and widget testing.
 class FakeRoutingService implements RoutingService {
   FakeRoutingService({
@@ -12,12 +29,52 @@ class FakeRoutingService implements RoutingService {
   RouteResult? cannedResult;
   bool shouldThrow;
   String errorMessage;
+  int callCount = 0;
+  final List<FakeRouteRequest> requests = [];
+  List<LatLng>? lastWaypoints;
+  bool? lastRequestAlternatives;
+  double? lastStartBearingDegrees;
+  Future<RouteResult> Function({
+    required List<LatLng> waypoints,
+    bool requestAlternatives,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees,
+    double? startRadiusMeters,
+  })? onGetRoute;
 
   @override
   Future<RouteResult> getRoute({
     required List<LatLng> waypoints,
     bool requestAlternatives = true,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees = 45.0,
+    double? startRadiusMeters,
   }) async {
+    callCount++;
+    final copiedWaypoints = List<LatLng>.from(waypoints);
+    lastWaypoints = copiedWaypoints;
+    lastRequestAlternatives = requestAlternatives;
+    lastStartBearingDegrees = startBearingDegrees;
+    requests.add(
+      FakeRouteRequest(
+        waypoints: copiedWaypoints,
+        requestAlternatives: requestAlternatives,
+        startBearingDegrees: startBearingDegrees,
+        startBearingToleranceDegrees: startBearingToleranceDegrees,
+        startRadiusMeters: startRadiusMeters,
+      ),
+    );
+
+    if (onGetRoute != null) {
+      return onGetRoute!(
+        waypoints: waypoints,
+        requestAlternatives: requestAlternatives,
+        startBearingDegrees: startBearingDegrees,
+        startBearingToleranceDegrees: startBearingToleranceDegrees,
+        startRadiusMeters: startRadiusMeters,
+      );
+    }
+
     if (shouldThrow) {
       throw Exception(errorMessage);
     }

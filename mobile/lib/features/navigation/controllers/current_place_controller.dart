@@ -7,8 +7,10 @@ import '../../../core/data/app_repositories.dart';
 import '../../../core/data/last_known_place_model.dart';
 import '../../../core/data/last_known_place_repository.dart';
 import '../../../core/data/place_repository.dart';
+import '../../settings/controllers/settings_controller.dart';
 import '../domain/geocoding_service.dart';
 import '../domain/location_service.dart';
+import '../domain/motion_math.dart';
 
 /// Status of the shared place resolution lifecycle.
 enum CurrentPlaceStatus {
@@ -39,7 +41,11 @@ class CurrentPlaceController extends ChangeNotifier {
         _placeRepository =
             placeRepository ?? AppRepositories.instance.placeRepository,
         _lastKnownPlaceRepository = lastKnownPlaceRepository ??
-            AppRepositories.instance.lastKnownPlaceRepository;
+            AppRepositories.instance.lastKnownPlaceRepository {
+    SettingsController.instance.addLocationModeListener(
+      restartPositionStreamIfActive,
+    );
+  }
 
   /// Global singleton instance across the application.
   static CurrentPlaceController instance = CurrentPlaceController();
@@ -66,8 +72,6 @@ class CurrentPlaceController extends ChangeNotifier {
   final GeocodingService _geocodingService;
   final PlaceRepository _placeRepository;
   final LastKnownPlaceRepository _lastKnownPlaceRepository;
-
-  static const Distance _distanceCalc = Distance();
 
   /// Neutral label used when no saved name or neighbourhood label is available.
   static const String fallbackLocationLabel = 'Your location';
@@ -251,11 +255,21 @@ class CurrentPlaceController extends ChangeNotifier {
     _positionSub?.cancel();
     try {
       _positionSub = _locationService
-          .getPositionStream(highAccuracy: false)
+          .getPositionStream(
+            highAccuracy: false,
+            forceLocationManager:
+                SettingsController.instance.gpsOnlyLocationProvider,
+          )
           .listen((pos) {
         updatePosition(pos, isFreshFix: true);
       }, onError: (_) {});
     } catch (_) {}
+  }
+
+  /// Restarts the active position stream when the location provider mode changes.
+  void restartPositionStreamIfActive() {
+    if (_disposed || _positionSub == null) return;
+    _startPositionStream();
   }
 
   /// Informs the controller that saved places were created or modified.
@@ -295,9 +309,10 @@ class CurrentPlaceController extends ChangeNotifier {
     _isLocationServiceEnabled = true;
     _isPermissionGranted = true;
 
-    // Check if we should refresh the label
+    // Check if we should refresh the label (only on verified good fixes)
     final here = pos.toLatLng();
-    final shouldRefresh = _shouldRefreshLabel(here, isFreshFix);
+    final isGood = MotionMath.isGoodFix(pos);
+    final shouldRefresh = isGood && _shouldRefreshLabel(here, isFreshFix);
 
     if (shouldRefresh) {
       await _refreshLabelFor(here, isFreshFix);
@@ -318,7 +333,7 @@ class CurrentPlaceController extends ChangeNotifier {
     }
 
     // Refresh rule 1: moved more than 100 m from last labelled position
-    final distance = _distanceCalc.as(LengthUnit.Meter, _lastLabelledPoint!, here);
+    final distance = MotionMath.distanceBetweenPoints(_lastLabelledPoint!, here);
     if (distance > minMoveMetersForRefresh) {
       return true;
     }
@@ -404,7 +419,7 @@ class CurrentPlaceController extends ChangeNotifier {
     PlaceSearchResult? best;
     double bestDist = double.infinity;
     for (final place in _savedPlaces) {
-      final d = _distanceCalc.as(LengthUnit.Meter, here, place.location);
+      final d = MotionMath.distanceBetweenPoints(here, place.location);
       if (d <= savedPlaceMatchRadiusMeters && d < bestDist) {
         best = place;
         bestDist = d;
@@ -475,6 +490,9 @@ class CurrentPlaceController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    SettingsController.instance.removeLocationModeListener(
+      restartPositionStreamIfActive,
+    );
     _positionSub?.cancel();
     super.dispose();
   }

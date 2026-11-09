@@ -50,6 +50,21 @@ class SettingsController extends ChangeNotifier {
 
   String? _dismissedAlertItemId;
   String? _dismissedAlertStatus;
+  bool _gpsOnlyLocationProvider = false;
+
+  /// Callbacks notified whenever [gpsOnlyLocationProvider] changes so active
+  /// GPS streams (navigation, ride tracker, place label) restart immediately.
+  final Set<VoidCallback> _locationModeListeners = <VoidCallback>{};
+
+  /// Registers a callback invoked when [gpsOnlyLocationProvider] is toggled.
+  void addLocationModeListener(VoidCallback listener) {
+    _locationModeListeners.add(listener);
+  }
+
+  /// Unregisters a previously added location-mode listener.
+  void removeLocationModeListener(VoidCallback listener) {
+    _locationModeListeners.remove(listener);
+  }
 
   // ── Getters ────────────────────────────────────────────────────────────────
   UnitsSystem get units => _units;
@@ -66,6 +81,10 @@ class SettingsController extends ChangeNotifier {
   DateTime? get recentActivityClearedAt => _recentActivityClearedAt;
   String? get dismissedAlertItemId => _dismissedAlertItemId;
   String? get dismissedAlertStatus => _dismissedAlertStatus;
+
+  /// Whether the experimental debug-only GPS-only location provider mode
+  /// (`AndroidSettings.forceLocationManager = true`) is enabled. Defaults to `false`.
+  bool get gpsOnlyLocationProvider => _gpsOnlyLocationProvider;
 
   static String formatBytes(int bytes) {
     if (bytes <= 0) return '0 B';
@@ -199,6 +218,20 @@ class SettingsController extends ChangeNotifier {
     save();
   }
 
+  /// Updates the experimental debug-only GPS-only location provider mode,
+  /// persists it to local settings, and restarts all active location streams.
+  Future<void> setGpsOnlyLocationProvider(bool enabled) async {
+    if (_gpsOnlyLocationProvider == enabled) return;
+    _gpsOnlyLocationProvider = enabled;
+    notifyListeners();
+    for (final listener in List<VoidCallback>.from(_locationModeListeners)) {
+      try {
+        listener();
+      } catch (_) {}
+    }
+    await save();
+  }
+
   /// Sets the cutoff timestamp for hiding prior entries from the Home recent activity feed.
   /// Never deletes underlying records in other repositories.
   Future<void> clearRecentActivity() async {
@@ -219,6 +252,7 @@ class SettingsController extends ChangeNotifier {
     _recentActivityClearedAt = null;
     _dismissedAlertItemId = null;
     _dismissedAlertStatus = null;
+    _gpsOnlyLocationProvider = false;
     notifyListeners();
   }
 
@@ -248,6 +282,7 @@ class SettingsController extends ChangeNotifier {
       _recentActivityClearedAt = settings.recentActivityClearedAt;
       _dismissedAlertItemId = settings.dismissedAlertItemId;
       _dismissedAlertStatus = settings.dismissedAlertStatus;
+      _gpsOnlyLocationProvider = settings.gpsOnlyLocationProvider;
       notifyListeners();
     } catch (_) {
       _notificationsEnabled = true;
@@ -259,6 +294,7 @@ class SettingsController extends ChangeNotifier {
       _recentActivityClearedAt = null;
       _dismissedAlertItemId = null;
       _dismissedAlertStatus = null;
+      _gpsOnlyLocationProvider = false;
       notifyListeners();
     }
   }
@@ -278,6 +314,7 @@ class SettingsController extends ChangeNotifier {
         recentActivityClearedAt: _recentActivityClearedAt,
         dismissedAlertItemId: _dismissedAlertItemId,
         dismissedAlertStatus: _dismissedAlertStatus,
+        gpsOnlyLocationProvider: _gpsOnlyLocationProvider,
       );
       await repo.saveSettings(settings);
     } catch (_) {

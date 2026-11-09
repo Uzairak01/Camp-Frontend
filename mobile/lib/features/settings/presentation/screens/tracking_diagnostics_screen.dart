@@ -1,16 +1,20 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../../core/widgets/camp_app_bar.dart';
 import '../../../../core/widgets/camp_card.dart';
 import '../../../garage/services/fuel_tracker_service.dart';
 import '../../../garage/services/tracking_diagnostics.dart';
+import '../../controllers/settings_controller.dart';
 
 /// Read-only live diagnostics panel for tracking telemetry, filter decisions,
 /// device permissions, and system power management.
@@ -105,6 +109,58 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
     );
   }
 
+  /// Exports the complete tracking diagnostics log formatted oldest-first
+  /// to a temporary file named `camp_log_<UTC timestamp>.txt` and presents
+  /// the system share sheet. Shows a SnackBar if saving or sharing fails.
+  Future<void> _shareLogAsFile(BuildContext context) async {
+    // Determine anchor rect before any async gap to satisfy use_build_context_synchronously
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box != null
+        ? (box.localToGlobal(Offset.zero) & box.size)
+        : null;
+
+    try {
+      final text = TrackingDiagnostics.instance.formatLogAsPlainText(
+        maxAccuracyMeters: FuelTrackerService.maxAccuracyMeters,
+        minDistanceMeters: FuelTrackerService.minDistanceMeters,
+        minSpeedMps: FuelTrackerService.minSpeedMps,
+        maxSpeedMps: FuelTrackerService.maxSpeedMps,
+        oldestFirst: true,
+      );
+
+      final tempDir = await getTemporaryDirectory();
+      // Format timestamp as UTC ISO-8601 with filesystem-safe delimiters (colons replaced)
+      final safeUtcTimestamp = DateTime.now()
+          .toUtc()
+          .toIso8601String()
+          .replaceAll(':', '-');
+      final fileName = 'camp_log_$safeUtcTimestamp.txt';
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsString(text, flush: true);
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path, mimeType: 'text/plain')],
+          subject: 'CAMP Tracking Diagnostics Log',
+          sharePositionOrigin: origin,
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to share log file: $e',
+            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+          ),
+          backgroundColor: AppColors.alertRed,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   void _clearLog() {
     TrackingDiagnostics.instance.clear();
   }
@@ -130,7 +186,10 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
         onActionPressed: _fetchSystemStatus,
       ),
       body: ListenableBuilder(
-        listenable: TrackingDiagnostics.instance,
+        listenable: Listenable.merge([
+          TrackingDiagnostics.instance,
+          SettingsController.instance,
+        ]),
         builder: (context, _) {
           final diag = TrackingDiagnostics.instance;
           final events = diag.events;
@@ -183,13 +242,16 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
               const Icon(Icons.phonelink_setup_rounded,
                   size: 16, color: AppColors.tacticalOrange),
               const SizedBox(width: 8),
-              Text(
-                'DEVICE & SERVICE STATUS',
-                style: GoogleFonts.manrope(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.0,
-                  color: AppColors.darkCharcoal,
+              Expanded(
+                child: Text(
+                  'DEVICE & SERVICE STATUS',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.manrope(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.0,
+                    color: AppColors.darkCharcoal,
+                  ),
                 ),
               ),
             ],
@@ -226,6 +288,51 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
             'No (expected: none running yet)',
             isNeutral: true,
           ),
+          _buildStatusRow(
+            'Location Provider Mode',
+            SettingsController.instance.gpsOnlyLocationProvider
+                ? 'GPS-only (forceLocationManager: true)'
+                : 'Fused Location Provider (default)',
+            isNeutral: true,
+          ),
+          if (widget.isDebugMode) ...[
+            const Divider(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'GPS-only provider (experimental)',
+                        style: GoogleFonts.manrope(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
+                      Text(
+                        'Force Android LocationManager hardware GPS across all streams',
+                        style: GoogleFonts.manrope(
+                          fontSize: 11,
+                          color: AppColors.mutedText,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  key: const ValueKey('tracking_diag_gps_only_switch'),
+                  value: SettingsController.instance.gpsOnlyLocationProvider,
+                  activeThumbColor: AppColors.tacticalOrange,
+                  onChanged: (val) {
+                    SettingsController.instance.setGpsOnlyLocationProvider(val);
+                  },
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -235,7 +342,7 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
     final isRiding = diag.trackerState == 'started';
     final secondsAgo = diag.secondsSinceLastFix;
     final lastFixDisplay = diag.lastFixTime != null
-        ? '${diag.lastFixTime!.hour.toString().padLeft(2, '0')}:${diag.lastFixTime!.minute.toString().padLeft(2, '0')}:${diag.lastFixTime!.second.toString().padLeft(2, '0')} (${secondsAgo ?? 0}s ago)'
+        ? '${diag.lastFixTime!.toLocal().hour.toString().padLeft(2, '0')}:${diag.lastFixTime!.toLocal().minute.toString().padLeft(2, '0')}:${diag.lastFixTime!.toLocal().second.toString().padLeft(2, '0')} (${secondsAgo ?? 0}s ago)'
         : 'None received yet';
 
     return CampCard(
@@ -245,22 +352,28 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.speed_rounded,
-                      size: 16, color: AppColors.tacticalOrange),
-                  const SizedBox(width: 8),
-                  Text(
-                    'LIVE TRACKER TELEMETRY',
-                    style: GoogleFonts.manrope(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.0,
-                      color: AppColors.darkCharcoal,
+              Expanded(
+                child: Row(
+                  children: [
+                    const Icon(Icons.speed_rounded,
+                        size: 16, color: AppColors.tacticalOrange),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'LIVE TRACKER TELEMETRY',
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.manrope(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.0,
+                          color: AppColors.darkCharcoal,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
@@ -320,13 +433,16 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
               const Icon(Icons.filter_alt_outlined,
                   size: 16, color: AppColors.tacticalOrange),
               const SizedBox(width: 8),
-              Text(
-                'ACTIVE TRACKER THRESHOLDS',
-                style: GoogleFonts.manrope(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.0,
-                  color: AppColors.darkCharcoal,
+              Expanded(
+                child: Text(
+                  'ACTIVE TRACKER THRESHOLDS',
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.manrope(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.0,
+                    color: AppColors.darkCharcoal,
+                  ),
                 ),
               ),
             ],
@@ -361,47 +477,103 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
     return Row(
       children: [
         Expanded(
-          child: ElevatedButton.icon(
+          child: ElevatedButton(
             key: const ValueKey('tracking_diag_copy_button'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.darkCharcoal,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              minimumSize: const Size(0, 44),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppColors.radiusCard),
               ),
             ),
-            icon: const Icon(Icons.copy_rounded, size: 16),
-            label: Text(
-              'Copy log',
-              style: GoogleFonts.manrope(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
+            onPressed: () => _copyLogToClipboard(context),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.copy_rounded, size: 16),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Copy log',
+                    style: GoogleFonts.manrope(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
-            onPressed: () => _copyLogToClipboard(context),
           ),
         ),
-        const SizedBox(width: 12),
-        ElevatedButton.icon(
+        const SizedBox(width: 8),
+        Expanded(
+          child: ElevatedButton(
+            key: const ValueKey('tracking_diag_share_file_button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.darkCharcoal,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 44),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppColors.radiusCard),
+              ),
+            ),
+            onPressed: () => _shareLogAsFile(context),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.share_rounded, size: 16),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Share log as file',
+                    style: GoogleFonts.manrope(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton(
           key: const ValueKey('tracking_diag_clear_button'),
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.clayDark,
             foregroundColor: AppColors.darkCharcoal,
-            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            minimumSize: const Size(0, 44),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppColors.radiusCard),
             ),
           ),
-          icon: const Icon(Icons.delete_outline_rounded, size: 16),
-          label: Text(
-            'Clear',
-            style: GoogleFonts.manrope(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
+          onPressed: _clearLog,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.delete_outline_rounded, size: 16),
+                const SizedBox(width: 4),
+                Text(
+                  'Clear',
+                  style: GoogleFonts.manrope(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
-          onPressed: _clearLog,
         ),
       ],
     );
@@ -411,13 +583,16 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          'EVENT LOG ($count of ${TrackingDiagnostics.maxEvents}, newest first)',
-          style: GoogleFonts.manrope(
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-            color: AppColors.darkCharcoal,
+        Expanded(
+          child: Text(
+            'EVENT LOG ($count of ${TrackingDiagnostics.maxEvents}, newest first)',
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.manrope(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+              color: AppColors.darkCharcoal,
+            ),
           ),
         ),
       ],
@@ -458,8 +633,10 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
   }
 
   Widget _buildEventTile(TrackingEvent event) {
-    final timeStr =
-        '${event.timestamp.hour.toString().padLeft(2, '0')}:${event.timestamp.minute.toString().padLeft(2, '0')}:${event.timestamp.second.toString().padLeft(2, '0')}';
+    final localTime = event.timestamp.toLocal();
+    final localTimeStr =
+        '${localTime.hour.toString().padLeft(2, '0')}:${localTime.minute.toString().padLeft(2, '0')}:${localTime.second.toString().padLeft(2, '0')}';
+    final timeStr = '${event.formattedTimestampUtc} ($localTimeStr)';
 
     // 1. Gap Event (Highlighted in RED)
     if (event.isGap) {
@@ -546,8 +723,15 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
       );
     }
 
-    // 3. State Change Event
-    if (event.type == TrackingEventType.trackerState) {
+    // 3. State Change / Off-Route / Reroute Event
+    if (event.type == TrackingEventType.trackerState ||
+        event.type == TrackingEventType.offRoute ||
+        event.type == TrackingEventType.reroute) {
+      final prefix = switch (event.type) {
+        TrackingEventType.offRoute => 'OFF-ROUTE',
+        TrackingEventType.reroute => 'REROUTE',
+        _ => 'TRACKER STATE',
+      };
       return Container(
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -559,14 +743,17 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'TRACKER STATE: ${event.message}',
-              style: GoogleFonts.jetBrainsMono(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: AppColors.darkCharcoal,
+            Expanded(
+              child: Text(
+                '$prefix: ${event.message}',
+                style: GoogleFonts.jetBrainsMono(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.darkCharcoal,
+                ),
               ),
             ),
+            const SizedBox(width: 8),
             Text(
               timeStr,
               style: GoogleFonts.jetBrainsMono(
@@ -642,7 +829,7 @@ class _TrackingDiagnosticsScreenState extends State<TrackingDiagnosticsScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Lat: ${event.formattedLatitude}, Lng: ${event.formattedLongitude} • Acc: ${event.formattedAccuracy} • Spd: ${event.formattedSpeed} [${event.formattedReportedSpeedValidity}] • CalcSpd: ${event.formattedCalculatedSpeed}',
+            'Lat: ${event.formattedLatitude}, Lng: ${event.formattedLongitude} • Acc: ${event.formattedAccuracy} (PrevAcc: ${event.formattedPreviousAccuracy}) • dt: ${event.formattedElapsedSeconds} • Dist: ${event.formattedDistanceFromPreviousAccepted} • Spd: ${event.formattedSpeed} [${event.formattedReportedSpeedValidity}] • CalcSpd: ${event.formattedCalculatedSpeed} • Passed: ${event.segmentPassed ? 'yes' : 'no'} • PrevTime: ${event.formattedPreviousAcceptedTimestampUtc}',
             style: GoogleFonts.jetBrainsMono(
               fontSize: 10.5,
               color: AppColors.darkCharcoal.withValues(alpha: 0.8),

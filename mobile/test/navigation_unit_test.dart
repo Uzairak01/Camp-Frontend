@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:camp/features/garage/controllers/active_bike_controller.dart';
+import 'package:camp/features/maintenance/domain/post_ride_report.dart';
 import 'package:camp/features/navigation/controllers/navigation_controller.dart';
 import 'package:camp/features/navigation/domain/geocoding_service.dart';
 import 'package:camp/features/navigation/domain/location_service.dart';
 import 'package:camp/features/navigation/domain/places_poi_service.dart';
+import 'package:camp/features/navigation/domain/route_progress.dart';
 import 'package:camp/features/navigation/domain/routing_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
@@ -178,13 +180,21 @@ void main() {
       // Point directly on segment
       const onLine = LatLng(48.500, -120.650);
       expect(
-        NavigationController.calculateDistanceToPolyline(onLine, polyline),
+        RouteProgress.snapToRoute(
+          polyline: polyline,
+          point: onLine,
+          searchEntirePolyline: true,
+        ).crossTrackMeters,
         lessThan(5.0),
       );
 
       // Point roughly 110m north
       const offLine = LatLng(48.501, -120.650);
-      final dist = NavigationController.calculateDistanceToPolyline(offLine, polyline);
+      final dist = RouteProgress.snapToRoute(
+        polyline: polyline,
+        point: offLine,
+        searchEntirePolyline: true,
+      ).crossTrackMeters;
       expect(dist, greaterThan(80.0));
       expect(dist, lessThan(140.0));
     });
@@ -265,31 +275,36 @@ void main() {
   });
 
   group('Speed Conversion across Unit Systems', () {
-    test('Converts speed in m/s to KM/H, clamped at 0 for null/negative', () async {
+    test('Converts reported speed in m/s to KM/H and shows -- or 0 when stationary', () async {
       final fakeLocation = FakeLocationService();
       final controller = NavigationController(locationService: fakeLocation);
       controller.startPositionStream();
+
+      final t0 = DateTime(2026, 6, 1, 12, 0, 0);
 
       // 10 m/s in Metric -> 36 km/h
       fakeLocation.emitPosition(
         PositionData(
           latitude: 48.0,
           longitude: -120.0,
+          accuracy: 8.0,
           speed: 10.0,
-          timestamp: DateTime.now(),
+          timestamp: t0,
         ),
       );
       await Future<void>.delayed(Duration.zero);
       expect(controller.currentSpeed, 36);
+      expect(controller.formattedSpeed, '36');
       expect(controller.speedUnitLabel, 'KM / H');
 
-      // Negative or null speed returns 0
+      // Stationary good fixes spanning >= 5 s with negative/null speed return 0
       fakeLocation.emitPosition(
         PositionData(
           latitude: 48.0,
           longitude: -120.0,
+          accuracy: 8.0,
           speed: -1.0,
-          timestamp: DateTime.now(),
+          timestamp: t0.add(const Duration(seconds: 5)),
         ),
       );
       await Future<void>.delayed(Duration.zero);
@@ -299,14 +314,151 @@ void main() {
         PositionData(
           latitude: 48.0,
           longitude: -120.0,
+          accuracy: 8.0,
           speed: null,
-          timestamp: DateTime.now(),
+          timestamp: t0.add(const Duration(seconds: 10)),
         ),
       );
       await Future<void>.delayed(Duration.zero);
       expect(controller.currentSpeed, 0);
 
       controller.dispose();
+    });
+
+    test('hasStartedMoving: requires 3s continuous >= 1.4 m/s, does not flip on single fix, resets on null/new nav, survives 0', () async {
+      final fakeLocation = FakeLocationService();
+      final fakeRouting = FakeRoutingService();
+      final controller = NavigationController(
+        locationService: fakeLocation,
+        routingService: fakeRouting,
+      );
+      controller.startPositionStream();
+
+      // Open preview and start guidance
+      await controller.openRoutePreview(
+        const PlaceSearchResult(
+          name: 'Timber Ridge',
+          displayName: 'Timber Ridge',
+          location: LatLng(48.514646, -120.642503),
+        ),
+      );
+      await controller.startNavigation();
+      expect(controller.hasStartedMoving, isFalse);
+
+      final t0 = DateTime(2026, 6, 1, 12, 0, 0);
+
+      // Fix 1: Single fast fix at t0 (10.0 m/s = 36 km/h >= 1.4 m/s)
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.513488,
+          longitude: -120.687716,
+          accuracy: 8.0,
+          speed: 10.0,
+          timestamp: t0,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      // Does not flip on a single fast fix
+      expect(controller.currentSpeed, 36);
+      expect(controller.hasStartedMoving, isFalse);
+
+      // Fix 2: Moving fix 2 seconds later (elapsed = 2.0s < 3.0s)
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.513600,
+          longitude: -120.687500,
+          accuracy: 8.0,
+          speed: 10.0,
+          timestamp: t0.add(const Duration(seconds: 2)),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hasStartedMoving, isFalse);
+
+      // Fix 3: Null speed / expired speed fix resets the 3-second timer
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.513700,
+          longitude: -120.687300,
+          accuracy: 60.0, // bad accuracy resets speed
+          speed: null,
+          timestamp: t0.add(const Duration(seconds: 12)),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.currentSpeed, isNull);
+      expect(controller.hasStartedMoving, isFalse);
+
+      // Fix 4: Fresh fast fix at t1 after reset
+      final t1 = t0.add(const Duration(seconds: 15));
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.513800,
+          longitude: -120.687100,
+          accuracy: 8.0,
+          speed: 10.0,
+          timestamp: t1,
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hasStartedMoving, isFalse);
+
+      // Fix 5: Moving fix at t1 + 3s (elapsed >= 3.0s continuously) -> flips to true
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.514000,
+          longitude: -120.686800,
+          accuracy: 8.0,
+          speed: 10.0,
+          timestamp: t1.add(const Duration(seconds: 3)),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hasStartedMoving, isTrue);
+
+      // Fix 6: Speed drops to 0 (stopped at red light) -> does NOT revert
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.514000,
+          longitude: -120.686800,
+          accuracy: 8.0,
+          speed: 0.0,
+          timestamp: t1.add(const Duration(seconds: 8)),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hasStartedMoving, isTrue);
+
+      // Starting a new navigation resets hasStartedMoving to false
+      await controller.startNavigation();
+      expect(controller.hasStartedMoving, isFalse);
+
+      // Stopping navigation resets hasStartedMoving to false
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.514000,
+          longitude: -120.686800,
+          accuracy: 8.0,
+          speed: 2.0,
+          timestamp: t1.add(const Duration(seconds: 10)),
+        ),
+      );
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.514000,
+          longitude: -120.686800,
+          accuracy: 8.0,
+          speed: 2.0,
+          timestamp: t1.add(const Duration(seconds: 13)),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hasStartedMoving, isTrue);
+      controller.stopNavigation();
+      expect(controller.hasStartedMoving, isFalse);
+
+      controller.dispose();
+      fakeLocation.dispose();
     });
   });
 
@@ -505,6 +657,76 @@ void main() {
       fakeLocation.dispose();
     });
   });
+
+  group('ETA & Time Formatting in Local Time', () {
+    test('formattedEta converts UTC fix timestamp to local time and keeps stored eta in UTC', () async {
+      final fakeLocation = FakeLocationService();
+      final fakeRouting = FakeRoutingService();
+      final controller = NavigationController(
+        locationService: fakeLocation,
+        routingService: fakeRouting,
+      );
+
+      const destination = PlaceSearchResult(
+        name: 'Target Destination',
+        displayName: 'Target Point',
+        location: LatLng(48.514646, -120.642503),
+      );
+      await controller.openRoutePreview(destination);
+      await controller.startNavigation();
+
+      // Emit a position with an explicit UTC timestamp (11:15 UTC)
+      final utcTimestamp = DateTime.utc(2026, 11, 9, 11, 15, 0);
+      fakeLocation.emitPosition(
+        PositionData(
+          latitude: 48.513488,
+          longitude: -120.687716,
+          timestamp: utcTimestamp,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(controller.eta, isNotNull);
+      // Stored ETA must remain in UTC as inherited from the GPS fix timestamp
+      expect(controller.eta!.isUtc, isTrue);
+
+      final localEta = controller.eta!.toLocal();
+      final expectedHour = localEta.hour.toString().padLeft(2, '0');
+      final expectedMinute = localEta.minute.toString().padLeft(2, '0');
+      expect(controller.formattedEta, '$expectedHour:$expectedMinute');
+
+      // If the running environment has a non-zero UTC offset, assert that
+      // formattedEta does not match raw UTC values (which would happen if .toLocal() was missing).
+      if (localEta.timeZoneOffset != Duration.zero) {
+        final utcHour = controller.eta!.toUtc().hour.toString().padLeft(2, '0');
+        final utcMinute = controller.eta!.toUtc().minute.toString().padLeft(2, '0');
+        expect(controller.formattedEta, isNot('$utcHour:$utcMinute'));
+      }
+
+      controller.dispose();
+      fakeLocation.dispose();
+    });
+
+    test('PostRideReport formats date using toLocal() while preserving UTC storage', () {
+      // 23:30 UTC on Nov 9: in UTC+5 (Pakistan) this is Nov 10, 04:30
+      final utcDate = DateTime.utc(2026, 11, 9, 23, 30);
+      final report = PostRideReport(
+        id: 'test-1',
+        bikeId: 'bike-123',
+        date: utcDate,
+        distanceKm: 12.0,
+        terrainTags: const ['highway'],
+        routeTitle: 'Morning Ride',
+      );
+
+      expect(report.date.isUtc, isTrue);
+      final localDate = utcDate.toLocal();
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      final expectedMonth = months[localDate.month - 1];
+      final expectedDateStr = '$expectedMonth ${localDate.day}, ${localDate.year}';
+      expect(report.formattedDate, expectedDateStr);
+    });
+  });
 }
 
 class _PendingPermissionLocationService extends FakeLocationService {
@@ -538,6 +760,9 @@ class _PendingRouteRoutingService extends FakeRoutingService {
     required List<LatLng> waypoints,
     String mode = 'motorcycle',
     bool requestAlternatives = false,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees = 45.0,
+    double? startRadiusMeters,
   }) =>
       routeCompleter.future;
 }

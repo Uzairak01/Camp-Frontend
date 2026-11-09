@@ -2,20 +2,23 @@ import 'package:flutter/foundation.dart';
 
 /// State model representing an in-progress tracked ride persisted to storage.
 ///
-/// Ensures ride progress (start time, distance in km, active bike, route title)
+/// Ensures ride progress (start time, distance in km, distance applied to the
+/// bike's odometer, pre-ride odometer baseline, active bike, and route title)
 /// survives sudden process kills, screen lock suspensions, or OS background kills,
-/// allowing the rider to finish or discard the ride on next app start.
+/// allowing the rider to continue, finish, or discard the ride on next app start.
 @immutable
 class InProgressRide {
   const InProgressRide({
     required this.id,
     required this.startedAt,
     required this.distanceKm,
+    double? appliedToOdometerKm,
+    this.preRideOdometerKm,
     this.bikeId,
     this.routeTitle,
     this.createdAt,
     this.updatedAt,
-  });
+  }) : appliedToOdometerKm = appliedToOdometerKm ?? distanceKm;
 
   /// Factory constructor parsing tolerant JSON from persistent local storage.
   factory InProgressRide.fromJson(Map<String, dynamic> json) {
@@ -33,11 +36,17 @@ class InProgressRide {
     final started = parseUtc(json['startedAt']) ?? DateTime.now().toUtc();
     final createdUtc = parseUtc(json['createdAt']) ?? started;
     final updatedUtc = parseUtc(json['updatedAt']) ?? createdUtc;
+    final distKm = (json['distanceKm'] as num?)?.toDouble() ?? 0.0;
+    final appliedKm =
+        (json['appliedToOdometerKm'] as num?)?.toDouble() ?? distKm;
+    final preRideOdoKm = (json['preRideOdometerKm'] as num?)?.toDouble();
 
     return InProgressRide(
       id: effectiveId,
       startedAt: started,
-      distanceKm: (json['distanceKm'] as num?)?.toDouble() ?? 0.0,
+      distanceKm: distKm,
+      appliedToOdometerKm: appliedKm,
+      preRideOdometerKm: preRideOdoKm,
       bikeId: json['bikeId'] as String?,
       routeTitle: json['routeTitle'] as String?,
       createdAt: createdUtc,
@@ -53,6 +62,14 @@ class InProgressRide {
 
   /// Distance accumulated so far in kilometers.
   final double distanceKm;
+
+  /// Exact distance in kilometers added to the bike's odometer during this ride.
+  /// Single source of truth for reverting odometer distance on discard or short ride.
+  final double appliedToOdometerKm;
+
+  /// The bike's odometer reading in kilometers right before this ride started.
+  /// Used as a floor so discarding never reduces the odometer below its pre-ride value.
+  final double? preRideOdometerKm;
 
   /// Identifier of the motorcycle being ridden.
   final String? bikeId;
@@ -73,6 +90,8 @@ class InProgressRide {
     String? id,
     DateTime? startedAt,
     double? distanceKm,
+    double? appliedToOdometerKm,
+    double? preRideOdometerKm,
     String? bikeId,
     String? routeTitle,
     DateTime? createdAt,
@@ -82,6 +101,8 @@ class InProgressRide {
       id: id ?? this.id,
       startedAt: startedAt ?? this.startedAt,
       distanceKm: distanceKm ?? this.distanceKm,
+      appliedToOdometerKm: appliedToOdometerKm ?? this.appliedToOdometerKm,
+      preRideOdometerKm: preRideOdometerKm ?? this.preRideOdometerKm,
       bikeId: bikeId ?? this.bikeId,
       routeTitle: routeTitle ?? this.routeTitle,
       createdAt: createdAt ?? this.createdAt,
@@ -97,6 +118,8 @@ class InProgressRide {
           id == other.id &&
           startedAt == other.startedAt &&
           distanceKm == other.distanceKm &&
+          appliedToOdometerKm == other.appliedToOdometerKm &&
+          preRideOdometerKm == other.preRideOdometerKm &&
           bikeId == other.bikeId &&
           routeTitle == other.routeTitle;
 
@@ -105,18 +128,22 @@ class InProgressRide {
         id,
         startedAt,
         distanceKm,
+        appliedToOdometerKm,
+        preRideOdometerKm,
         bikeId,
         routeTitle,
       );
 
   @override
   String toString() =>
-      'InProgressRide(id: $id, dist: ${distanceKm}km, started: $startedAt, title: $routeTitle)';
+      'InProgressRide(id: $id, dist: ${distanceKm}km, appliedOdo: ${appliedToOdometerKm}km, preOdo: $preRideOdometerKm, started: $startedAt, title: $routeTitle)';
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'startedAt': startedAt.toUtc().toIso8601String(),
         'distanceKm': distanceKm,
+        'appliedToOdometerKm': appliedToOdometerKm,
+        'preRideOdometerKm': preRideOdometerKm,
         'bikeId': bikeId,
         'routeTitle': routeTitle,
         'createdAt': effectiveCreatedAt.toIso8601String(),

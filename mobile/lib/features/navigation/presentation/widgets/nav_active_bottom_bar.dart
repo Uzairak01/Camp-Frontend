@@ -23,7 +23,17 @@ class NavActiveBottomBar extends StatelessWidget {
   final VoidCallback onConfirmExit;
   final VoidCallback? onToggleOverview;
 
-  Future<void> _promptExitConfirmation(BuildContext context) async {
+  Future<void> _promptExitConfirmation(BuildContext context) {
+    return promptExitConfirmation(context, onConfirmExit: onConfirmExit);
+  }
+
+  /// Prompts the navigation exit sheet or confirmation dialog:
+  /// - When ride tracking is running, shows the bottom sheet offering "Finish ride", "Keep tracking", and "Discard".
+  /// - When not tracking, shows the dialog to confirm ending guidance.
+  static Future<void> promptExitConfirmation(
+    BuildContext context, {
+    required VoidCallback onConfirmExit,
+  }) async {
     final isTracking = FuelTrackerService.instance.isRiding;
 
     if (isTracking) {
@@ -112,31 +122,44 @@ class NavActiveBottomBar extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(height: 6),
+              TextButton(
+                key: const ValueKey('nav_exit_discard_ride_button'),
+                onPressed: () async {
+                  final confirmed =
+                      await RideSummarySheet.showDiscardConfirmationDialog(
+                    ctx,
+                    distanceKm: FuelTrackerService.instance.appliedToOdometerKm,
+                  );
+                  if (confirmed && ctx.mounted) {
+                    Navigator.of(ctx).pop('discard');
+                  }
+                },
+                child: Text(
+                  'Discard',
+                  style: GoogleFonts.manrope(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFFEF4444),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
       );
 
+      if (!context.mounted) return;
+
       if (choice == 'finish') {
-        final report = await FuelTrackerService.instance.finishRide();
-        onConfirmExit();
-        if (context.mounted) {
-          if (report != null) {
-            RideSummarySheet.show(context, report);
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Ride too short to record',
-                  style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-                ),
-                backgroundColor: AppColors.darkCharcoal,
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }
-        }
+        await RideSummarySheet.finishRideAndShowSummary(
+          context,
+          onFinished: onConfirmExit,
+        );
       } else if (choice == 'keep') {
+        onConfirmExit();
+      } else if (choice == 'discard') {
+        await FuelTrackerService.instance.discardSavedRide();
         onConfirmExit();
       }
       return;
@@ -249,23 +272,21 @@ class NavActiveBottomBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      controller.formattedRemainingDuration,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
+                Text(
+                  controller.formattedRemainingDuration,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${controller.formattedRemainingDistance} remaining',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Color(0xFF9CA3AF),
                     fontSize: 12,

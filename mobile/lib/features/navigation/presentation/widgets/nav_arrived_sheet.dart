@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../app/theme/app_colors.dart';
 import '../../../dashboard/presentation/widgets/ride_summary_sheet.dart';
-import '../../../garage/services/fuel_tracker_service.dart';
 import '../../../settings/controllers/settings_controller.dart';
 import '../../controllers/navigation_controller.dart';
 
@@ -24,24 +22,10 @@ class NavArrivedSheet extends StatelessWidget {
   /// Completes the active tracked ride using the same finish flow as the exit sheet,
   /// dismisses the arrival state, and presents the ride summary or short-ride notice.
   Future<void> _handleFinishRide(BuildContext context) async {
-    final report = await FuelTrackerService.instance.finishRide();
-    onDone();
-    if (context.mounted) {
-      if (report != null) {
-        RideSummarySheet.show(context, report);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Ride too short to record',
-              style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-            ),
-            backgroundColor: AppColors.darkCharcoal,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
+    await RideSummarySheet.finishRideAndShowSummary(
+      context,
+      onFinished: onDone,
+    );
   }
 
   @override

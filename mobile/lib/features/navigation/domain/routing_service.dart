@@ -123,6 +123,27 @@ class RouteStep {
     final km = distanceMeters / 1000.0;
     return '${km.toStringAsFixed(1)} km';
   }
+
+  /// Creates a copy of this [RouteStep] with selected fields replaced.
+  RouteStep copyWith({
+    String? maneuverType,
+    String? maneuverModifier,
+    String? streetName,
+    double? distanceMeters,
+    double? durationSeconds,
+    LatLng? location,
+    String? instruction,
+  }) {
+    return RouteStep(
+      maneuverType: maneuverType ?? this.maneuverType,
+      maneuverModifier: maneuverModifier ?? this.maneuverModifier,
+      streetName: streetName ?? this.streetName,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      location: location ?? this.location,
+      instruction: instruction ?? this.instruction,
+    );
+  }
 }
 
 /// Complete routing calculation result including full polyline, metrics, and turn steps.
@@ -144,6 +165,26 @@ class RouteResult {
   /// Optional alternate route polyline (rendered in subtle gray).
   final List<LatLng>? alternatePolyline;
   final double? alternateDurationSeconds;
+
+  /// Creates a copy of this [RouteResult] with selected fields replaced.
+  RouteResult copyWith({
+    List<LatLng>? polyline,
+    double? distanceMeters,
+    double? durationSeconds,
+    List<RouteStep>? steps,
+    List<LatLng>? alternatePolyline,
+    double? alternateDurationSeconds,
+  }) {
+    return RouteResult(
+      polyline: polyline ?? this.polyline,
+      distanceMeters: distanceMeters ?? this.distanceMeters,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      steps: steps ?? this.steps,
+      alternatePolyline: alternatePolyline ?? this.alternatePolyline,
+      alternateDurationSeconds:
+          alternateDurationSeconds ?? this.alternateDurationSeconds,
+    );
+  }
 
   /// Formatted duration string (e.g. "11 min", "1h 8m").
   String get formattedDuration {
@@ -173,9 +214,17 @@ class RouteResult {
 abstract class RoutingService {
   /// Calculate route passing through [waypoints] (must have at least 2 points: start and end).
   /// Intermediate points act as via-stops.
+  ///
+  /// When [startBearingDegrees] is provided, constrains the departure bearing
+  /// of the start waypoint in OSRM (`bearings={heading},{tolerance};...`).
+  /// When [startRadiusMeters] is provided, constrains the snapping radius of
+  /// the start waypoint in OSRM (`radiuses={radius};unlimited...`).
   Future<RouteResult> getRoute({
     required List<LatLng> waypoints,
     bool requestAlternatives = true,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees = 45.0,
+    double? startRadiusMeters,
   });
 }
 
@@ -189,22 +238,67 @@ class OsrmRoutingService implements RoutingService {
   final String baseUrl;
   final http.Client _httpClient;
 
+  /// Builds the OSRM route request URI including optional `bearings` and `radiuses` constraints.
+  Uri buildRouteUri({
+    required List<LatLng> waypoints,
+    bool requestAlternatives = true,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees = 45.0,
+    double? startRadiusMeters,
+  }) {
+    // Coordinates format: {lon},{lat};{lon},{lat}...
+    final coordsString = waypoints
+        .map((p) =>
+            '${p.longitude.toStringAsFixed(6)},${p.latitude.toStringAsFixed(6)}')
+        .join(';');
+
+    final queryBuffer = StringBuffer(
+      'overview=full&geometries=geojson&steps=true',
+    );
+    if (requestAlternatives) {
+      queryBuffer.write('&alternatives=true');
+    }
+    if (startBearingDegrees != null) {
+      final heading = ((startBearingDegrees % 360.0) + 360.0).round() % 360;
+      final tol = startBearingToleranceDegrees.round().clamp(0, 180);
+      final bearingsParam = [
+        '$heading,$tol',
+        ...List.filled(waypoints.length - 1, ''),
+      ].join(';');
+      queryBuffer.write('&bearings=$bearingsParam');
+    }
+    if (startRadiusMeters != null && startRadiusMeters > 0) {
+      final radius = startRadiusMeters.round();
+      final radiusesParam = [
+        '$radius',
+        ...List.filled(waypoints.length - 1, 'unlimited'),
+      ].join(';');
+      queryBuffer.write('&radiuses=$radiusesParam');
+    }
+
+    return Uri.parse(
+      '$baseUrl/route/v1/driving/$coordsString?${queryBuffer.toString()}',
+    );
+  }
+
   @override
   Future<RouteResult> getRoute({
     required List<LatLng> waypoints,
     bool requestAlternatives = true,
+    double? startBearingDegrees,
+    double startBearingToleranceDegrees = 45.0,
+    double? startRadiusMeters,
   }) async {
     if (waypoints.length < 2) {
       throw ArgumentError('At least 2 waypoints required for routing.');
     }
 
-    // Coordinates format: {lon},{lat};{lon},{lat}...
-    final coordsString = waypoints
-        .map((p) => '${p.longitude.toStringAsFixed(6)},${p.latitude.toStringAsFixed(6)}')
-        .join(';');
-
-    final uri = Uri.parse(
-      '$baseUrl/route/v1/driving/$coordsString?overview=full&geometries=geojson&steps=true${requestAlternatives ? '&alternatives=true' : ''}',
+    final uri = buildRouteUri(
+      waypoints: waypoints,
+      requestAlternatives: requestAlternatives,
+      startBearingDegrees: startBearingDegrees,
+      startBearingToleranceDegrees: startBearingToleranceDegrees,
+      startRadiusMeters: startRadiusMeters,
     );
 
     try {
@@ -217,6 +311,20 @@ class OsrmRoutingService implements RoutingService {
       ).timeout(const Duration(seconds: 8));
 
       if (response.statusCode != 200) {
+        if (response.body.isNotEmpty) {
+          try {
+            final errData = json.decode(response.body);
+            if (errData is Map && errData['code'] != null) {
+              throw Exception(
+                '${errData['code']}: ${errData['message'] ?? response.reasonPhrase}',
+              );
+            }
+          } catch (e) {
+            if (e is Exception && !e.toString().contains('FormatException')) {
+              rethrow;
+            }
+          }
+        }
         throw Exception(
           'Routing server error (${response.statusCode}): ${response.reasonPhrase}',
         );
@@ -224,7 +332,9 @@ class OsrmRoutingService implements RoutingService {
 
       final data = json.decode(response.body) as Map<String, dynamic>;
       if (data['code'] != 'Ok') {
-        throw Exception(data['message'] ?? 'Routing calculation failed');
+        throw Exception(
+          '${data['code'] ?? 'Error'}: ${data['message'] ?? 'Routing calculation failed'}',
+        );
       }
 
       return parseOsrmResponse(data);

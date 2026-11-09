@@ -124,7 +124,7 @@ class LatestExpeditionCardWidget extends StatelessWidget {
       Stat(
         label: 'DATE',
         value:
-            '${kTripMonths[effectiveReport.date.month - 1]} ${effectiveReport.date.day}',
+            '${kTripMonths[effectiveReport.date.toLocal().month - 1]} ${effectiveReport.date.toLocal().day}',
       ),
       Stat(
         label: 'TERRAIN',

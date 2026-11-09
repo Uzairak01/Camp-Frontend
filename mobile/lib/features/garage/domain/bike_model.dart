@@ -123,8 +123,11 @@ class Bike {
       remainingLiters = remainingLiters.clamp(0.0, tankCapacity);
     }
 
-    final rawOdo = json['odometerKm'] as int? ?? 0;
+    // Tolerant load: old values (whole km or 0.1 km) and new full-precision
+    // doubles are all accepted; whole-km falls back to the rounded precise value.
     final preciseOdo = (json['preciseOdometerKm'] as num?)?.toDouble();
+    final rawOdo =
+        (json['odometerKm'] as num?)?.round() ?? preciseOdo?.round() ?? 0;
     final fuelLevelOdo = (json['fuelLevelOdometerKm'] as num?)?.toDouble() ??
         preciseOdo ??
         rawOdo.toDouble();

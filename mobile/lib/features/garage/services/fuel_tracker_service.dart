@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
-import 'package:geolocator/geolocator.dart';
 
 import '../../../core/data/app_repositories.dart';
 import '../../../core/data/in_progress_ride_model.dart';
@@ -10,6 +9,7 @@ import '../../../core/data/in_progress_ride_repository.dart';
 import '../../maintenance/controllers/post_ride_report_controller.dart';
 import '../../maintenance/domain/post_ride_report.dart';
 import '../../navigation/domain/location_service.dart';
+import '../../navigation/domain/motion_math.dart';
 import '../../settings/controllers/settings_controller.dart';
 import '../controllers/active_bike_controller.dart';
 import '../domain/fuel_estimator.dart';
@@ -32,6 +32,9 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
         _inProgressRideRepository = inProgressRideRepository ??
             AppRepositories.instance.inProgressRideRepository {
     WidgetsBinding.instance.addObserver(this);
+    SettingsController.instance.addLocationModeListener(
+      restartPositionStreamIfActive,
+    );
   }
 
   /// Global singleton instance.
@@ -39,7 +42,7 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Maximum horizontal accuracy in meters allowed for a location fix. Fixes with
   /// accuracy > 30 m are considered too inaccurate and rejected.
-  static const double maxAccuracyMeters = 30.0;
+  static const double maxAccuracyMeters = MotionMath.maxAccuracyMeters;
 
   /// Minimum distance in meters between consecutive fixes to count as actual movement.
   /// Used to eliminate GPS jitter while stationary.
@@ -64,6 +67,9 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _isRiding = false;
   double _rideDistanceKm = 0.0;
+  double _appliedToOdometerKm = 0.0;
+  double? _preRideOdometerKm;
+  String? _rideBikeId;
   DateTime? _rideStartedAt;
   String? _routeTitle;
   String? _locationErrorMessage;
@@ -71,15 +77,35 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
   bool _hasRequestedNotificationPermission = false;
   bool _hasUnsavedChanges = false;
 
+  /// Tracks completed reports' applied odometer distances and pre-ride floors
+  /// so discarding from the post-finish summary sheet removes the exact km.
+  final Map<String, _FinishedRideOdometerRecord> _finishedReportRecords = {};
+
+  /// Tracks ride/report keys that have already been discarded so a double discard
+  /// never subtracts distance from the bike's odometer twice.
+  final Set<String> _discardedRideKeys = {};
+
   // ── Getters ────────────────────────────────────────────────────────────────
   bool get isRiding => _isRiding;
   double get rideDistanceKm => _rideDistanceKm;
+
+  /// Exact distance in kilometers added to the active bike's odometer during the current ride.
+  double get appliedToOdometerKm => _appliedToOdometerKm;
+
+  /// Odometer reading in kilometers captured immediately before the current ride started.
+  double? get preRideOdometerKm => _preRideOdometerKm;
+
   DateTime? get rideStartedAt => _rideStartedAt;
   String? get routeTitle => _routeTitle;
   String? get locationErrorMessage => _locationErrorMessage;
   bool get hasShownLowFuelNotification => _hasShownLowFuelNotification;
   bool get notificationPermissionGranted =>
       _notificationService.notificationPermissionGranted;
+
+  /// Returns the odometer distance in kilometers that was applied for [report].
+  double appliedOdometerKmForReport(PostRideReport report) {
+    return _finishedReportRecords[report.id]?.appliedKm ?? report.distanceKm;
+  }
 
   /// Whether an in-app low fuel warning banner should be shown on the Active Rig card.
   bool get isLowFuelWarningActive {
@@ -118,9 +144,14 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
   void resetForTesting() {
     _positionSubscription?.cancel();
+    _positionSubscription = null;
     _throttleSaveTimer?.cancel();
+    _throttleSaveTimer = null;
     _isRiding = false;
     _rideDistanceKm = 0.0;
+    _appliedToOdometerKm = 0.0;
+    _preRideOdometerKm = null;
+    _rideBikeId = null;
     _rideStartedAt = null;
     _routeTitle = null;
     _locationErrorMessage = null;
@@ -128,6 +159,8 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     _hasRequestedNotificationPermission = false;
     _hasUnsavedChanges = false;
     _lastAcceptedPosition = null;
+    _finishedReportRecords.clear();
+    _discardedRideKeys.clear();
     TrackingDiagnostics.instance.recordTrackerState('stopped');
     notifyListeners();
   }
@@ -194,15 +227,15 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     _isRiding = true;
     _rideStartedAt = DateTime.now();
     _rideDistanceKm = 0.0;
+    _appliedToOdometerKm = 0.0;
+    _rideBikeId = bike?.id;
+    _preRideOdometerKm = bike != null
+        ? (bike.preciseOdometerKm ?? bike.odometerKm.toDouble())
+        : null;
     _lastAcceptedPosition = null;
     TrackingDiagnostics.instance.recordTrackerState('started');
 
-    _positionSubscription = _locationService
-        .getPositionStream(
-          highAccuracy: true,
-          enableForegroundNotification: true,
-        )
-        .listen(handlePositionUpdate);
+    _subscribeToPositionStream();
 
     _throttleSaveTimer?.cancel();
     _throttleSaveTimer = Timer.periodic(
@@ -224,7 +257,9 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       id: 'active-ride',
       startedAt: _rideStartedAt ?? DateTime.now(),
       distanceKm: _rideDistanceKm,
-      bikeId: _bikeController.activeBike?.id,
+      appliedToOdometerKm: _appliedToOdometerKm,
+      preRideOdometerKm: _preRideOdometerKm,
+      bikeId: _rideBikeId ?? _bikeController.activeBike?.id,
       routeTitle: _routeTitle,
     );
     _inProgressRideRepository.saveInProgressRide(inProgress);
@@ -246,28 +281,64 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// Completes the active ride, stops tracking, clears in-progress persistence,
-  /// and creates a [PostRideReport] via [PostRideReportController] with source = 'tracked'.
-  /// If the tracked distance is under 0.1 km, does not create a report and returns null.
+  /// Completes the active ride, persists the final odometer distance, stops tracking,
+  /// clears in-progress persistence, and creates a [PostRideReport] via
+  /// [PostRideReportController] with source = 'tracked'.
+  ///
+  /// If the tracked distance is under 0.1 km ("too short to record"), subtracts
+  /// the distance applied to the bike's odometer (never below the pre-ride value),
+  /// does not create a report, and returns null.
   Future<PostRideReport?> finishRide() async {
     final wasRiding = _isRiding;
     final distance = _rideDistanceKm;
+    final appliedKm = _appliedToOdometerKm;
+    final preRideOdo = _preRideOdometerKm;
     final started = _rideStartedAt ?? DateTime.now();
     final ended = DateTime.now();
     final durationHours = ended.difference(started).inSeconds / 3600.0;
     final title = _routeTitle ?? '';
-    final bikeId = _bikeController.activeBike?.id ?? 'unknown-bike';
+    final bikeId =
+        _rideBikeId ?? _bikeController.activeBike?.id ?? 'unknown-bike';
 
+    // Stop stream and periodic timer synchronously first so nothing re-saves after clear.
+    _isRiding = false;
+    _throttleSaveTimer?.cancel();
+    _throttleSaveTimer = null;
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
+    _lastAcceptedPosition = null;
     if (wasRiding) {
-      await stopRide();
+      TrackingDiagnostics.instance.recordTrackerState('stopped');
     }
-    await _inProgressRideRepository.clear();
+
+    _rideDistanceKm = 0.0;
+    _appliedToOdometerKm = 0.0;
+    _preRideOdometerKm = null;
+    _rideBikeId = null;
     _routeTitle = null;
     _rideStartedAt = null;
+    await _inProgressRideRepository.clear();
 
     if (distance < 0.1) {
+      // Ride too short to record: revert any distance added to the bike's odometer.
+      _subtractDistanceFromBike(
+        bikeId: bikeId,
+        kmToRemove: appliedKm,
+        minOdometerKm: preRideOdo,
+      );
+      await flush();
+      notifyListeners();
       return null;
     }
+
+    // Reconcile and persist the final distance on the bike before completing the ride.
+    _reconcileBikeOdometerWithApplied(
+      bikeId: bikeId,
+      preRideOdometerKm: preRideOdo,
+      appliedToOdometerKm: appliedKm,
+    );
+    await flush();
+    notifyListeners();
 
     final report = PostRideReport(
       id: 'rep-${DateTime.now().millisecondsSinceEpoch}',
@@ -284,13 +355,20 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       updatedAt: DateTime.now().toUtc(),
     );
 
+    _finishedReportRecords[report.id] = _FinishedRideOdometerRecord(
+      appliedKm: appliedKm,
+      preRideOdometerKm: preRideOdo,
+      bikeId: bikeId,
+    );
+
     PostRideReportController.instance.addReport(report);
     return report;
   }
 
-  /// Resumes an unfinished ride from [savedRide] by restoring distance, start time,
+  /// Resumes an unfinished ride from [savedRide] by restoring distance,
+  /// [InProgressRide.appliedToOdometerKm], pre-ride odometer floor, start time,
   /// and route title into memory and restarting the GPS stream without resetting
-  /// accumulated distance to zero.
+  /// accumulated distance or double-applying odometer distance.
   Future<bool> resumeRide(InProgressRide savedRide) async {
     _locationErrorMessage = null;
 
@@ -320,7 +398,11 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       } catch (_) {}
     }
 
-    final bike = _bikeController.activeBike;
+    final targetBikeId = savedRide.bikeId ?? _bikeController.activeBike?.id;
+    final bike = (targetBikeId != null
+            ? _bikeController.getBikeById(targetBikeId)
+            : null) ??
+        _bikeController.activeBike;
     if (bike != null) {
       final currentLiters = FuelEstimator.currentLiters(bike);
       final pct = FuelEstimator.percent(
@@ -337,6 +419,26 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
     _isRiding = true;
     _rideDistanceKm = savedRide.distanceKm;
+    _appliedToOdometerKm = savedRide.appliedToOdometerKm;
+    _rideBikeId = targetBikeId;
+    if (savedRide.preRideOdometerKm != null) {
+      _preRideOdometerKm = savedRide.preRideOdometerKm;
+      // Ensure bike odometer matches preRideOdometerKm + appliedToOdometerKm
+      // without double-applying or losing distance if app was killed before flush.
+      _reconcileBikeOdometerWithApplied(
+        bikeId: targetBikeId,
+        preRideOdometerKm: _preRideOdometerKm,
+        appliedToOdometerKm: _appliedToOdometerKm,
+      );
+    } else if (bike != null) {
+      final currentPreciseOdo =
+          bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
+      _preRideOdometerKm =
+          math.max(0.0, currentPreciseOdo - _appliedToOdometerKm);
+    } else {
+      _preRideOdometerKm = null;
+    }
+
     _rideStartedAt = savedRide.startedAt;
     _routeTitle = (savedRide.routeTitle != null &&
             savedRide.routeTitle!.trim().isNotEmpty)
@@ -346,16 +448,11 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
     TrackingDiagnostics.instance.recordTrackerState(
       'resumed',
-      'Restored ${savedRide.distanceKm.toStringAsFixed(1)} km',
+      'Restored ${savedRide.distanceKm.toStringAsFixed(1)} km (applied ${savedRide.appliedToOdometerKm.toStringAsFixed(1)} km)',
       savedRide.distanceKm * 1000.0,
     );
 
-    _positionSubscription = _locationService
-        .getPositionStream(
-          highAccuracy: true,
-          enableForegroundNotification: true,
-        )
-        .listen(handlePositionUpdate);
+    _subscribeToPositionStream();
 
     _throttleSaveTimer = Timer.periodic(
       const Duration(seconds: 30),
@@ -373,38 +470,70 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
   /// Internal helper that stops the active tracker and resets all in-memory ride state
   /// prior to clearing persistent in-progress storage.
   Future<void> _stopAndResetInMemoryState() async {
-    await stopRide();
+    _isRiding = false;
     _throttleSaveTimer?.cancel();
     _throttleSaveTimer = null;
     _positionSubscription?.cancel();
     _positionSubscription = null;
-    _isRiding = false;
     _rideDistanceKm = 0.0;
+    _appliedToOdometerKm = 0.0;
+    _preRideOdometerKm = null;
+    _rideBikeId = null;
     _rideStartedAt = null;
     _routeTitle = null;
     _lastAcceptedPosition = null;
+    TrackingDiagnostics.instance.recordTrackerState('stopped');
   }
 
   /// Completes an unfinished ride recovered from persistent storage after an app kill.
   /// Stops any active tracker and resets in-memory state before clearing the repository.
-  /// Generates a [PostRideReport] with source = 'tracked' if distance >= 0.1 km.
+  ///
+  /// If [savedRide.distanceKm] < 0.1 km ("too short to record"), subtracts
+  /// [savedRide.appliedToOdometerKm] from the bike's odometer (never below pre-ride value)
+  /// and returns null. Otherwise reconciles & persists the final odometer distance and
+  /// generates a [PostRideReport] with source = 'tracked'.
   Future<PostRideReport?> finishSavedRide(InProgressRide savedRide) async {
+    final inMemoryPreRideOdo = _preRideOdometerKm;
+    final inMemoryAppliedKm = _appliedToOdometerKm;
+    final inMemoryBikeId = _rideBikeId;
+
     await _stopAndResetInMemoryState();
     await _inProgressRideRepository.clear();
-    notifyListeners();
+
+    final effectiveBikeId = savedRide.bikeId ??
+        inMemoryBikeId ??
+        _bikeController.activeBike?.id ??
+        'unknown-bike';
+    final effectivePreRideOdo = savedRide.preRideOdometerKm ?? inMemoryPreRideOdo;
+    final effectiveAppliedKm = savedRide.appliedToOdometerKm > 0
+        ? savedRide.appliedToOdometerKm
+        : (inMemoryAppliedKm > 0 ? inMemoryAppliedKm : savedRide.distanceKm);
 
     if (savedRide.distanceKm < 0.1) {
+      _subtractDistanceFromBike(
+        bikeId: effectiveBikeId,
+        kmToRemove: effectiveAppliedKm,
+        minOdometerKm: effectivePreRideOdo,
+      );
+      await flush();
+      notifyListeners();
       return null;
     }
+
+    _reconcileBikeOdometerWithApplied(
+      bikeId: effectiveBikeId,
+      preRideOdometerKm: effectivePreRideOdo,
+      appliedToOdometerKm: effectiveAppliedKm,
+    );
+    await flush();
+    notifyListeners();
 
     final ended = DateTime.now();
     final durationHours =
         ended.difference(savedRide.startedAt).inSeconds / 3600.0;
     final report = PostRideReport(
       id: 'rep-${DateTime.now().millisecondsSinceEpoch}',
-      bikeId: savedRide.bikeId ??
-          _bikeController.activeBike?.id ??
-          'unknown-bike',
+      bikeId: effectiveBikeId,
       date: savedRide.startedAt,
       startedAt: savedRide.startedAt,
       endedAt: ended,
@@ -417,16 +546,229 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       updatedAt: DateTime.now().toUtc(),
     );
 
+    _finishedReportRecords[report.id] = _FinishedRideOdometerRecord(
+      appliedKm: effectiveAppliedKm,
+      preRideOdometerKm: effectivePreRideOdo,
+      bikeId: effectiveBikeId,
+    );
+
     PostRideReportController.instance.addReport(report);
     return report;
   }
 
-  /// Discards an unfinished ride recovered from persistent storage without creating a report.
-  /// Stops any active tracker and resets in-memory state before clearing the repository.
-  Future<void> discardSavedRide() async {
+  String _buildRideKey(InProgressRide ride) =>
+      'ride:${ride.id}:${ride.startedAt.toUtc().millisecondsSinceEpoch}';
+
+  /// Discards an active or unfinished ride recovered from persistent storage without
+  /// creating a report, and subtracts the exact distance added to the bike's odometer
+  /// during the ride (never below the pre-ride odometer value).
+  ///
+  /// Idempotent: calling [discardSavedRide] multiple times for the same ride will
+  /// never subtract distance from the odometer more than once, and cancels the
+  /// periodic save timer before clearing storage so the discarded ride is never re-saved.
+  Future<void> discardSavedRide([InProgressRide? savedRide]) async {
+    final wasRiding = _isRiding;
+    final inMemoryAppliedKm = _appliedToOdometerKm;
+    final inMemoryPreRideOdo = _preRideOdometerKm;
+    final inMemoryBikeId = _rideBikeId;
+    final inMemoryStartedAt = _rideStartedAt;
+
+    // Synchronously stop the tracker and cancel the 30-second periodic timer
+    // before any await so no timer tick can re-save the discarded ride.
     await _stopAndResetInMemoryState();
+
+    final repoRide = await _inProgressRideRepository.loadInProgressRide();
     await _inProgressRideRepository.clear();
+
+    final targetRide = savedRide ?? repoRide;
+    final String? rideKey = targetRide != null
+        ? _buildRideKey(targetRide)
+        : (inMemoryStartedAt != null
+            ? 'ride:active-ride:${inMemoryStartedAt.toUtc().millisecondsSinceEpoch}'
+            : null);
+
+    // Guard against double-discard: if already discarded, or if nothing was active/saved.
+    if (rideKey != null && _discardedRideKeys.contains(rideKey)) {
+      await flush();
+      notifyListeners();
+      return;
+    }
+    if (!wasRiding &&
+        inMemoryAppliedKm <= 0 &&
+        repoRide == null &&
+        savedRide == null) {
+      await flush();
+      notifyListeners();
+      return;
+    }
+
+    if (rideKey != null) {
+      _discardedRideKeys.add(rideKey);
+    }
+
+    final double kmToRemove = wasRiding
+        ? inMemoryAppliedKm
+        : (targetRide?.appliedToOdometerKm ?? inMemoryAppliedKm);
+    final double? floorOdo =
+        inMemoryPreRideOdo ?? targetRide?.preRideOdometerKm;
+    final String? targetBikeId = inMemoryBikeId ??
+        targetRide?.bikeId ??
+        _bikeController.activeBike?.id;
+
+    _subtractDistanceFromBike(
+      bikeId: targetBikeId,
+      kmToRemove: kmToRemove,
+      minOdometerKm: floorOdo,
+    );
+    await flush();
     notifyListeners();
+  }
+
+  /// Discards a just-finished tracked ride from the summary sheet, removing [report]
+  /// from [PostRideReportController] and subtracting the ride's applied odometer
+  /// distance (never below the pre-ride odometer value).
+  ///
+  /// Idempotent: calling [discardFinishedRideReport] twice for the same [report]
+  /// will not subtract distance a second time.
+  Future<void> discardFinishedRideReport(PostRideReport report) async {
+    final reportKey = 'report:${report.id}';
+    if (_discardedRideKeys.contains(reportKey)) {
+      return;
+    }
+    _discardedRideKeys.add(reportKey);
+
+    PostRideReportController.instance.removeReport(report.id);
+
+    final record = _finishedReportRecords.remove(report.id);
+    final kmToRemove = record?.appliedKm ?? report.distanceKm;
+    final floorOdo = record?.preRideOdometerKm;
+    final targetBikeId = record?.bikeId ?? report.bikeId;
+
+    _subtractDistanceFromBike(
+      bikeId: targetBikeId,
+      kmToRemove: kmToRemove,
+      minOdometerKm: floorOdo,
+    );
+    await flush();
+    notifyListeners();
+  }
+
+  /// Applies [distanceKm] to the target bike's odometer with double precision.
+  void applyDistanceToBike({
+    required String? bikeId,
+    required double distanceKm,
+  }) {
+    if (distanceKm <= 0) return;
+    final bike = (bikeId != null ? _bikeController.getBikeById(bikeId) : null) ??
+        _bikeController.activeBike;
+    if (bike == null) return;
+
+    final currentPreciseOdo =
+        bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
+    final newPreciseOdo = currentPreciseOdo + distanceKm;
+    final baseOdo = bike.fuelLevelOdometerKm ?? currentPreciseOdo;
+    final updatedBike = bike.copyWith(
+      odometerKm: newPreciseOdo.round(),
+      preciseOdometerKm: newPreciseOdo,
+      fuelLevelOdometerKm: baseOdo,
+      lastUpdated: DateTime.now(),
+    );
+    _bikeController.updateBike(updatedBike);
+    _hasUnsavedChanges = true;
+  }
+
+  /// Subtracts [kmToRemove] from the target bike's odometer, clamping so the
+  /// odometer never drops below [minOdometerKm] (or 0.0).
+  void subtractDistanceFromBike({
+    required String? bikeId,
+    required double kmToRemove,
+    double? minOdometerKm,
+  }) {
+    _subtractDistanceFromBike(
+      bikeId: bikeId,
+      kmToRemove: kmToRemove,
+      minOdometerKm: minOdometerKm,
+    );
+  }
+
+  /// Subtracts [kmToRemove] from the target bike's odometer, clamping so the
+  /// odometer never drops below [minOdometerKm] (the pre-ride odometer reading)
+  /// or 0.0.
+  void _subtractDistanceFromBike({
+    required String? bikeId,
+    required double kmToRemove,
+    required double? minOdometerKm,
+  }) {
+    if (kmToRemove <= 0) return;
+    final bike = (bikeId != null ? _bikeController.getBikeById(bikeId) : null) ??
+        _bikeController.activeBike;
+    if (bike == null) return;
+
+    final currentPreciseOdo =
+        bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
+    final floorOdo = math.max(0.0, minOdometerKm ?? 0.0);
+    final effectiveFloor = math.min(currentPreciseOdo, floorOdo);
+    final rawNewOdo = currentPreciseOdo - kmToRemove;
+    // Full precision; snap to the floor when within float noise so a discard
+    // returns exactly to the pre-ride odometer with no drift.
+    double clampedPreciseOdo =
+        rawNewOdo.clamp(effectiveFloor, currentPreciseOdo).toDouble();
+    if ((clampedPreciseOdo - effectiveFloor).abs() <= 1e-9) {
+      clampedPreciseOdo = effectiveFloor;
+    }
+
+    final updatedBike = bike.copyWith(
+      odometerKm: clampedPreciseOdo.round(),
+      preciseOdometerKm: clampedPreciseOdo,
+    );
+    _bikeController.updateBike(updatedBike);
+    _hasUnsavedChanges = true;
+  }
+
+  /// Ensures the bike's odometer reflects `preRideOdometerKm + appliedToOdometerKm`
+  /// as the single source of truth without double-applying or losing distance.
+  void _reconcileBikeOdometerWithApplied({
+    required String? bikeId,
+    required double? preRideOdometerKm,
+    required double appliedToOdometerKm,
+  }) {
+    if (preRideOdometerKm == null || appliedToOdometerKm < 0) return;
+    final bike = (bikeId != null ? _bikeController.getBikeById(bikeId) : null) ??
+        _bikeController.activeBike;
+    if (bike == null) return;
+
+    // Full precision expected value; tolerance only absorbs float noise.
+    final expectedPreciseOdo = preRideOdometerKm + appliedToOdometerKm;
+    final currentPreciseOdo =
+        bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
+    if ((currentPreciseOdo - expectedPreciseOdo).abs() > 1e-9) {
+      final baseOdo = bike.fuelLevelOdometerKm ?? preRideOdometerKm;
+      final updatedBike = bike.copyWith(
+        odometerKm: expectedPreciseOdo.round(),
+        preciseOdometerKm: expectedPreciseOdo,
+        fuelLevelOdometerKm: baseOdo,
+      );
+      _bikeController.updateBike(updatedBike);
+      _hasUnsavedChanges = true;
+    }
+  }
+
+  void _subscribeToPositionStream() {
+    _positionSubscription?.cancel();
+    _positionSubscription = _locationService
+        .getPositionStream(
+          highAccuracy: true,
+          enableForegroundNotification: true,
+          forceLocationManager:
+              SettingsController.instance.gpsOnlyLocationProvider,
+        )
+        .listen(handlePositionUpdate);
+  }
+
+  /// Restarts the active tracker GPS stream when the location provider mode changes.
+  void restartPositionStreamIfActive() {
+    if (!_isRiding) return;
+    _subscribeToPositionStream();
   }
 
   // ── Position Processing & Distance Filtering ───────────────────────────────
@@ -436,13 +778,32 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
   /// Evaluates movement strictly against [_lastAcceptedPosition] (baseline is never
   /// updated on rejected fixes, allowing small steps to accumulate until threshold).
   void handlePositionUpdate(PositionData position) {
+    final prevAccepted = _lastAcceptedPosition;
+    final double? distFromPrev = prevAccepted != null
+        ? MotionMath.distanceMeters(prevAccepted, position)
+        : null;
+    final double? elapsedSec = prevAccepted != null
+        ? MotionMath.elapsedSeconds(prevAccepted, position)
+        : null;
+    final double? calcSpeedFromPrev = prevAccepted != null
+        ? MotionMath.calculatedSpeedMpsOrZero(prevAccepted, position)
+        : null;
+    final bool hasValidReportedSpeed =
+        position.speed != null && position.speed! >= minSpeedMps;
+
     if (!_isRiding) {
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: prevAccepted?.timestamp,
+        elapsedSeconds: elapsedSec,
+        distanceFromPreviousAcceptedMeters: distFromPrev,
+        previousAccuracy: prevAccepted?.accuracy,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
+        calculatedSpeed: calcSpeedFromPrev,
         accepted: false,
         reason: 'Not navigating (ride not started / stopped)',
       );
@@ -450,13 +811,19 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     // 1. Ignore fixes with accuracy > maxAccuracyMeters (30 m)
-    if (position.accuracy != null && position.accuracy! > maxAccuracyMeters) {
+    if (!MotionMath.isGoodFix(position, maxAccuracy: maxAccuracyMeters)) {
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: prevAccepted?.timestamp,
+        elapsedSeconds: elapsedSec,
+        distanceFromPreviousAcceptedMeters: distFromPrev,
+        previousAccuracy: prevAccepted?.accuracy,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
+        calculatedSpeed: calcSpeedFromPrev,
         accepted: false,
         reason:
             'Accuracy filter (> ${maxAccuracyMeters.toStringAsFixed(0)} m: ${position.accuracy!.toStringAsFixed(1)} m)',
@@ -465,14 +832,19 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     }
 
     // Baseline fix establishing initial coordinate
-    if (_lastAcceptedPosition == null) {
+    if (prevAccepted == null) {
       _lastAcceptedPosition = position;
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: null,
+        elapsedSeconds: 0.0,
+        distanceFromPreviousAcceptedMeters: 0.0,
+        previousAccuracy: null,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
         calculatedSpeed: 0.0,
         accepted: true,
         reason: 'Baseline fix (starting point, 0 m accumulated)',
@@ -481,29 +853,23 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    final distMeters = Geolocator.distanceBetween(
-      _lastAcceptedPosition!.latitude,
-      _lastAcceptedPosition!.longitude,
-      position.latitude,
-      position.longitude,
-    );
-
-    final timeElapsedSeconds = position.timestamp
-            .difference(_lastAcceptedPosition!.timestamp)
-            .inMilliseconds /
-        1000.0;
-
-    final double calcSpeed =
-        timeElapsedSeconds > 0 ? distMeters / timeElapsedSeconds : 0.0;
+    final distMeters = distFromPrev!;
+    final timeElapsedSeconds = elapsedSec!;
+    final double calcSpeed = calcSpeedFromPrev!;
 
     // 2. Reject if dist < minDistanceMeters (5 m)
     if (distMeters < minDistanceMeters) {
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: prevAccepted.timestamp,
+        elapsedSeconds: timeElapsedSeconds,
+        distanceFromPreviousAcceptedMeters: distMeters,
+        previousAccuracy: prevAccepted.accuracy,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
         calculatedSpeed: calcSpeed,
         accepted: false,
         reason:
@@ -516,8 +882,6 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     // - If reported speed >= minSpeedMps (1.0 m/s): treat as moving and proceed.
     // - Otherwise (reported speed null, 0.0, or < 1.0 m/s), reported speed is unreliable:
     //   accept only if calcSpeed >= minSpeedMps AND dist >= max(minDistanceMeters, position.accuracy).
-    final bool hasValidReportedSpeed =
-        position.speed != null && position.speed! >= minSpeedMps;
     if (!hasValidReportedSpeed) {
       final double effectiveAccuracy = position.accuracy ?? 0.0;
       final double requiredDist =
@@ -528,10 +892,15 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
       if (!isMovingByCalc) {
         TrackingDiagnostics.instance.recordFix(
           timestamp: position.timestamp,
+          previousAcceptedTimestamp: prevAccepted.timestamp,
+          elapsedSeconds: timeElapsedSeconds,
+          distanceFromPreviousAcceptedMeters: distMeters,
+          previousAccuracy: prevAccepted.accuracy,
           latitude: position.latitude,
           longitude: position.longitude,
           accuracy: position.accuracy,
           speed: position.speed,
+          reportedSpeedValid: hasValidReportedSpeed,
           calculatedSpeed: calcSpeed,
           accepted: false,
           reason:
@@ -545,10 +914,15 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     if (position.speed != null && position.speed! > maxSpeedMps) {
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: prevAccepted.timestamp,
+        elapsedSeconds: timeElapsedSeconds,
+        distanceFromPreviousAcceptedMeters: distMeters,
+        previousAccuracy: prevAccepted.accuracy,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
         calculatedSpeed: calcSpeed,
         accepted: false,
         reason:
@@ -559,10 +933,15 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
     if (timeElapsedSeconds > 0 && calcSpeed > maxSpeedMps) {
       TrackingDiagnostics.instance.recordFix(
         timestamp: position.timestamp,
+        previousAcceptedTimestamp: prevAccepted.timestamp,
+        elapsedSeconds: timeElapsedSeconds,
+        distanceFromPreviousAcceptedMeters: distMeters,
+        previousAccuracy: prevAccepted.accuracy,
         latitude: position.latitude,
         longitude: position.longitude,
         accuracy: position.accuracy,
         speed: position.speed,
+        reportedSpeedValid: hasValidReportedSpeed,
         calculatedSpeed: calcSpeed,
         accepted: false,
         reason:
@@ -578,10 +957,15 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
 
     TrackingDiagnostics.instance.recordFix(
       timestamp: position.timestamp,
+      previousAcceptedTimestamp: prevAccepted.timestamp,
+      elapsedSeconds: timeElapsedSeconds,
+      distanceFromPreviousAcceptedMeters: distMeters,
+      previousAccuracy: prevAccepted.accuracy,
       latitude: position.latitude,
       longitude: position.longitude,
       accuracy: position.accuracy,
       speed: position.speed,
+      reportedSpeedValid: hasValidReportedSpeed,
       calculatedSpeed: calcSpeed,
       accepted: true,
       reason: 'Accepted (+${distMeters.toStringAsFixed(1)} m)',
@@ -592,13 +976,27 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _applyDistanceToActiveBike(double segmentKm) {
-    final bike = _bikeController.activeBike;
-    if (bike == null) return;
+    final bike = (_rideBikeId != null
+            ? _bikeController.getBikeById(_rideBikeId!)
+            : null) ??
+        _bikeController.activeBike;
+    if (bike == null) {
+      _persistInProgressRide();
+      notifyListeners();
+      return;
+    }
 
+    _rideBikeId ??= bike.id;
     final currentPreciseOdo =
         bike.preciseOdometerKm ?? bike.odometerKm.toDouble();
-    final newPreciseOdo =
-        double.parse((currentPreciseOdo + segmentKm).toStringAsFixed(1));
+    _preRideOdometerKm ??= currentPreciseOdo;
+
+    // Full double precision: no per-fix rounding, so short segments (e.g. 30 m)
+    // accumulate instead of being lost. Only the whole-km display value is rounded.
+    final newPreciseOdo = currentPreciseOdo + segmentKm;
+    if (segmentKm > 0) {
+      _appliedToOdometerKm += segmentKm;
+    }
     final baseOdo = bike.fuelLevelOdometerKm ?? currentPreciseOdo;
 
     // Update bike with advanced odometer; fuelRemainingLiters is NOT decremented per GPS fix.
@@ -675,9 +1073,26 @@ class FuelTrackerService extends ChangeNotifier with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    SettingsController.instance.removeLocationModeListener(
+      restartPositionStreamIfActive,
+    );
     _positionSubscription?.cancel();
     _throttleSaveTimer?.cancel();
     flush();
     super.dispose();
   }
+}
+
+/// Internal value record capturing the exact odometer delta and pre-ride floor
+/// for a finished ride report so post-finish discard can revert it accurately.
+class _FinishedRideOdometerRecord {
+  const _FinishedRideOdometerRecord({
+    required this.appliedKm,
+    required this.preRideOdometerKm,
+    required this.bikeId,
+  });
+
+  final double appliedKm;
+  final double? preRideOdometerKm;
+  final String bikeId;
 }

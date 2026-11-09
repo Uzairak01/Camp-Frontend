@@ -22,6 +22,7 @@ class AppSettings {
     this.dismissedAlertItemId,
     this.dismissedAlertStatus,
     this.wifiAutoUpdateRoutePacks = true,
+    this.gpsOnlyLocationProvider = false,
   })  : id = id ?? 'settings-default',
         createdAt = (createdAt ?? DateTime.now()).toUtc(),
         updatedAt = (updatedAt ?? DateTime.now()).toUtc();
@@ -58,6 +59,8 @@ class AppSettings {
       dismissedAlertStatus: json['dismissedAlertStatus'] as String?,
       wifiAutoUpdateRoutePacks:
           json['wifiAutoUpdateRoutePacks'] as bool? ?? true,
+      gpsOnlyLocationProvider:
+          json['gpsOnlyLocationProvider'] as bool? ?? false,
     );
   }
 
@@ -82,6 +85,7 @@ class AppSettings {
   final String? dismissedAlertItemId;
   final String? dismissedAlertStatus;
   final bool wifiAutoUpdateRoutePacks;
+  final bool gpsOnlyLocationProvider;
 
   AppSettings copyWith({
     String? id,
@@ -103,6 +107,7 @@ class AppSettings {
     String? dismissedAlertStatus,
     bool clearDismissedAlert = false,
     bool? wifiAutoUpdateRoutePacks,
+    bool? gpsOnlyLocationProvider,
   }) {
     return AppSettings(
       id: id ?? this.id,
@@ -131,6 +136,8 @@ class AppSettings {
           : (dismissedAlertStatus ?? this.dismissedAlertStatus),
       wifiAutoUpdateRoutePacks:
           wifiAutoUpdateRoutePacks ?? this.wifiAutoUpdateRoutePacks,
+      gpsOnlyLocationProvider:
+          gpsOnlyLocationProvider ?? this.gpsOnlyLocationProvider,
     );
   }
 
@@ -153,6 +160,7 @@ class AppSettings {
         'dismissedAlertItemId': dismissedAlertItemId,
         'dismissedAlertStatus': dismissedAlertStatus,
         'wifiAutoUpdateRoutePacks': wifiAutoUpdateRoutePacks,
+        'gpsOnlyLocationProvider': gpsOnlyLocationProvider,
       };
 
   @override
@@ -174,7 +182,8 @@ class AppSettings {
           recentActivityClearedAt == other.recentActivityClearedAt &&
           dismissedAlertItemId == other.dismissedAlertItemId &&
           dismissedAlertStatus == other.dismissedAlertStatus &&
-          wifiAutoUpdateRoutePacks == other.wifiAutoUpdateRoutePacks;
+          wifiAutoUpdateRoutePacks == other.wifiAutoUpdateRoutePacks &&
+          gpsOnlyLocationProvider == other.gpsOnlyLocationProvider;
 
   @override
   int get hashCode => Object.hash(
@@ -190,6 +199,11 @@ class AppSettings {
         fuelPricePerLiter,
         showBikeOnEmergencyQr,
         recentActivityClearedAt,
-        Object.hash(dismissedAlertItemId, dismissedAlertStatus, wifiAutoUpdateRoutePacks),
+        Object.hash(
+          dismissedAlertItemId,
+          dismissedAlertStatus,
+          wifiAutoUpdateRoutePacks,
+          gpsOnlyLocationProvider,
+        ),
       );
 }
